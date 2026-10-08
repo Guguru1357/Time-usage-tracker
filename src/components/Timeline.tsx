@@ -4,6 +4,8 @@ import type { Catalog } from '../hooks';
 import { MIN, assignLanes, clipToNow, dayEnd, dayStart, findGaps, fmtDuration, fmtHM, type Interval } from '../time';
 
 const PX_PER_MIN = 1.1;
+/** 只在打開 App 時捲到現在時間；之後切換日期維持原本的捲動位置 */
+let didInitialScroll = false;
 
 interface Props {
   dateKey: string;
@@ -32,8 +34,10 @@ export function Timeline({ dateKey, entries, catalog, onEntry, onGap }: Props) {
   // 打開時捲到「現在」附近，不是今天就捲到第一個空白或早上
   const focusAt = isToday ? now - 2 * 60 * MIN : (gaps.find((g) => g.start >= start + 6 * 60 * MIN)?.start ?? start + 7 * 60 * MIN);
   useEffect(() => {
+    if (didInitialScroll) return;
+    didInitialScroll = true;
     scrollTarget.current?.scrollIntoView({ block: 'start' });
-  }, [dateKey]);
+  }, []);
 
   return (
     <div className="timeline" style={{ height: 24 * 60 * PX_PER_MIN }}>
@@ -53,7 +57,7 @@ export function Timeline({ dateKey, entries, catalog, onEntry, onGap }: Props) {
           >
             {y(g.end) - y(g.start) >= 22 && (
               <span>
-                ＋ 未記錄 {fmtHM(g.start)}–{g.end === end ? '24:00' : fmtHM(g.end)}（{fmtDuration(g.end - g.start)}）
+                ＋ {fmtHM(g.start)}–{g.end === end ? '24:00' : fmtHM(g.end)} 未記錄 · {fmtDuration(g.end - g.start)}
               </span>
             )}
           </button>
@@ -71,13 +75,12 @@ export function Timeline({ dateKey, entries, catalog, onEntry, onGap }: Props) {
                 height: Math.max(h, 10),
                 left: `${(lane / lanes) * 100}%`,
                 width: `calc(${100 / lanes}% - 2px)`,
-                background: a?.color ?? '#94a3b8',
+                ['--c' as string]: a?.color ?? '#94a3b8',
               }}
               onClick={() => onEntry(item.entry)}
             >
               {h >= 16 && (
                 <span className="tl-entry-label">
-                  {cat?.highlight && '⚠ '}
                   {a?.name ?? '（已刪除）'}
                   {h >= 34 && (
                     <small>

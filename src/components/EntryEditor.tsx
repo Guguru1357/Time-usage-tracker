@@ -184,19 +184,18 @@ export function EntryEditor({ target, catalog, step, onClose, onSavedNext }: Pro
           )}
           {grouped.map(({ cat, acts }) => (
             <div key={cat.id || 'none'}>
-              <div className="group-label" style={{ color: cat.color }}>
-                {cat.highlight && '⚠ '}
-                {cat.name}
+              <div className="group-label">
+                <span className={cat.highlight ? 'sns-text' : ''}>{cat.name}</span>
+                {cat.id && (
+                  <button className="group-add" onClick={() => setAddingTo(cat.id)}>
+                    ＋ 新增
+                  </button>
+                )}
               </div>
               <div className="act-grid">
                 {acts.map((a) => (
                   <ActButton key={a.id} name={a.name} color={a.color} selected={activityId === a.id} onClick={() => setActivityId(a.id)} />
                 ))}
-                {cat.id && (
-                  <button className="act-btn add" onClick={() => setAddingTo(cat.id)}>
-                    ＋ 新增活動
-                  </button>
-                )}
               </div>
             </div>
           ))}
@@ -266,10 +265,10 @@ function ActButton(props: { name: string; color: string; selected: boolean; onCl
   return (
     <button
       className={`act-btn${props.selected ? ' selected' : ''}`}
-      style={{ borderColor: props.color, ...(props.selected ? { background: props.color } : {}) }}
+      style={{ ['--c' as string]: props.color }}
       onClick={props.onClick}
     >
-      <span className="dot" style={{ background: props.color }} />
+      <span className="dot" />
       {props.name}
     </button>
   );

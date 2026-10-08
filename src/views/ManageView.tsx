@@ -45,10 +45,7 @@ export function ManageView() {
         <>
           {groups.map(({ cat, acts }) => (
             <section key={cat?.id ?? 'none'}>
-              <h3 style={{ color: cat?.color }}>
-                {cat?.highlight && '⚠ '}
-                {cat?.name ?? '未分類'}
-              </h3>
+              <h3 className={`group-title${cat?.highlight ? ' sns-text' : ''}`}>{cat?.name ?? '未分類'}</h3>
               {acts.length === 0 && <div className="muted small">（沒有活動）</div>}
               <div className="manage-list">
                 {acts.map((a, i) => (
@@ -175,7 +172,6 @@ export function ActivityForm({
                 <button
                   key={c.id}
                   className={`chip${categoryId === c.id ? ' selected' : ''}`}
-                  style={categoryId === c.id ? { background: c.color, borderColor: c.color, color: '#fff' } : { borderColor: c.color }}
                   onClick={() => setCategoryId(c.id)}
                 >
                   {c.name}

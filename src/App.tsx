@@ -1,6 +1,9 @@
 import { App as CapApp } from '@capacitor/app';
 import { useEffect, useRef, useState } from 'react';
+import { IconClock, IconList, IconSettings } from './components/Icons';
+import { useSettings } from './hooks';
 import { isNative, onReviewNotificationTap, rescheduleReminders } from './notifications';
+import { applyTheme } from './theme';
 import { todayKey } from './time';
 import { DayView } from './views/DayView';
 import { ManageView } from './views/ManageView';
@@ -16,6 +19,8 @@ type Route =
 export function App() {
   const [stack, setStack] = useState<Route[]>([{ name: 'day', date: todayKey() }]);
   const route = stack[stack.length - 1];
+  const theme = useSettings().theme;
+  useEffect(() => applyTheme(theme), [theme]);
   const stackRef = useRef(stack);
   stackRef.current = stack;
 
@@ -62,13 +67,16 @@ export function App() {
       </main>
       <nav className="tabbar">
         <button className={route.name === 'day' || route.name === 'review' ? 'active' : ''} onClick={() => tab({ name: 'day', date: todayKey() })}>
-          <span className="tab-icon">◷</span>時間軸
+          <IconClock />
+          時間軸
         </button>
         <button className={route.name === 'manage' ? 'active' : ''} onClick={() => tab({ name: 'manage' })}>
-          <span className="tab-icon">☰</span>活動
+          <IconList />
+          活動
         </button>
         <button className={route.name === 'settings' ? 'active' : ''} onClick={() => tab({ name: 'settings' })}>
-          <span className="tab-icon">⚙</span>設定
+          <IconSettings />
+          設定
         </button>
       </nav>
     </div>

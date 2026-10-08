@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { type EditorTarget, EntryEditor } from '../components/EntryEditor';
+import { IconChevronLeft } from '../components/Icons';
 import { useCatalog, useEntries, useSettings } from '../hooks';
 import { entriesOverlapping } from '../repo';
 import { MIN, clipToNow, findGaps, fmtDateLabel, fmtDuration, fmtHMRel, periodsForDay, todayKey } from '../time';
@@ -46,7 +47,7 @@ export function ReviewView({ dateKey, reminderId, onBack }: Props) {
     <div className="page">
       <header className="sub-header">
         <button className="icon-btn" onClick={onBack} aria-label="返回">
-          ‹
+          <IconChevronLeft />
         </button>
         <div>
           <div className="sub-title">
@@ -70,7 +71,7 @@ export function ReviewView({ dateKey, reminderId, onBack }: Props) {
                   {fmtHMRel(g.start, dateKey)} – {fmtHMRel(g.end, dateKey)}
                 </span>
                 <span className="muted">{fmtDuration(g.end - g.start)}</span>
-                <span className="gap-plus">＋ 補記</span>
+                <span className="gap-plus">補記</span>
               </button>
             ))}
           </div>

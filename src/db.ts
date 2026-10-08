@@ -56,8 +56,12 @@ export interface Reminder {
   enabled: boolean;
 }
 
+export type ThemeMode = 'light' | 'dark' | 'system';
+
 export interface Settings {
   id: 'main';
+  /** 外觀，未設定時為淺色 */
+  theme?: ThemeMode;
   /** 時間刻度（分鐘） */
   step: number;
   reminders: Reminder[];

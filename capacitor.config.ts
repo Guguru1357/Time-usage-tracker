@@ -5,6 +5,10 @@ const config: CapacitorConfig = {
   appName: '時間記帳',
   webDir: 'dist',
   plugins: {
+    SystemBars: {
+      style: 'LIGHT',
+      initialViewportFitValueHint: 'cover',
+    },
     LocalNotifications: {
       smallIcon: 'ic_stat_clock',
       iconColor: '#2563eb',

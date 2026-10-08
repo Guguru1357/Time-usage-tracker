@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { type EditorTarget, EntryEditor } from '../components/EntryEditor';
+import { IconChevronLeft, IconChevronRight, IconPlus } from '../components/Icons';
 import { Timeline } from '../components/Timeline';
 import { useCatalog, useEntries, useSettings } from '../hooks';
 import {
@@ -75,36 +76,41 @@ export function DayView({ dateKey, onDate, onReview }: Props) {
   return (
     <div className="page">
       <header className="day-header">
-        <button className="icon-btn" onClick={() => onDate(addDays(dateKey, -1))} aria-label="前一天">
-          ‹
-        </button>
         <label className="date-pick">
-          <span>{fmtDateLabel(dateKey)}</span>
-          {isToday && <span className="badge">今天</span>}
+          <span className="date-title">{fmtDateLabel(dateKey)}</span>
+          <span className="date-sub">{isToday ? '今天' : '點此選擇日期'}</span>
           <input type="date" value={dateKey} onChange={(e) => e.target.value && onDate(e.target.value)} />
         </label>
-        <button className="icon-btn" onClick={() => onDate(addDays(dateKey, 1))} aria-label="後一天">
-          ›
-        </button>
-        {!isToday && (
-          <button className="chip" onClick={() => onDate(todayKey())}>
-            回今天
+        <div className="day-nav">
+          {!isToday && (
+            <button className="text-btn" onClick={() => onDate(todayKey())}>
+              今天
+            </button>
+          )}
+          <button className="icon-btn" onClick={() => onDate(addDays(dateKey, -1))} aria-label="前一天">
+            <IconChevronLeft />
           </button>
-        )}
+          <button className="icon-btn" onClick={() => onDate(addDays(dateKey, 1))} aria-label="後一天">
+            <IconChevronRight />
+          </button>
+        </div>
       </header>
 
       <div className="summary">
         <div>
-          <b>{fmtHours(recorded)}</b>
           <span>已記錄</span>
+          <b>{fmtHours(recorded)}</b>
         </div>
         <div>
-          <b>{fmtHours(gapMs)}</b>
-          <span>未記錄{elapsed > 0 ? ` / ${fmtHours(elapsed)}` : ''}</span>
+          <span>未記錄</span>
+          <b>
+            {fmtHours(gapMs)}
+            {elapsed > 0 && <small> / {fmtHours(elapsed)}</small>}
+          </b>
         </div>
-        <div className={highlighted > 0 ? 'sns-hot' : 'sns'}>
-          <b>{fmtHours(highlighted)}</b>
+        <div className={highlighted > 0 ? 'sns-hot' : ''}>
           <span>{highlightName}</span>
+          <b>{fmtHours(highlighted)}</b>
         </div>
       </div>
 
@@ -116,8 +122,8 @@ export function DayView({ dateKey, onDate, onReview }: Props) {
             const n = findGaps(r, clipped, 10 * MIN).length;
             return (
               <button key={p.reminder.id} className={`period-chip${n === 0 ? ' done' : ''}`} onClick={() => onReview(p.reminder.id)}>
-                回顧{p.reminder.periodLabel}
-                <small>{n === 0 ? '✓ 完成' : `${n} 段空白`}</small>
+                <span>{p.reminder.periodLabel}</span>
+                <small>{n === 0 ? '已完成' : `${n} 段空白`}</small>
               </button>
             );
           })}
@@ -133,7 +139,7 @@ export function DayView({ dateKey, onDate, onReview }: Props) {
       />
 
       <button className="fab" onClick={openNew} aria-label="新增紀錄">
-        ＋
+        <IconPlus size={26} />
       </button>
 
       {editor && (

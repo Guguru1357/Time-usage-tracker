@@ -140,11 +140,28 @@ export function SettingsView() {
       </section>
 
       <section className="card">
+        <h3>外觀</h3>
+        <div className="segmented">
+          {(
+            [
+              ['light', '淺色'],
+              ['dark', '深色'],
+              ['system', '跟隨系統'],
+            ] as const
+          ).map(([v, label]) => (
+            <button key={v} className={(settings.theme ?? 'light') === v ? 'active' : ''} onClick={() => updateSettings({ theme: v })}>
+              {label}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <section className="card">
         <h3>時間刻度</h3>
-        <div className="chips">
+        <div className="segmented">
           {[5, 10, 15, 30].map((s) => (
-            <button key={s} className={`chip${settings.step === s ? ' selected' : ''}`} onClick={() => updateSettings({ step: s })}>
-              {s} 分鐘
+            <button key={s} className={settings.step === s ? 'active' : ''} onClick={() => updateSettings({ step: s })}>
+              {s} 分
             </button>
           ))}
         </div>
@@ -152,10 +169,10 @@ export function SettingsView() {
 
       <section className="card">
         <h3>備份</h3>
-        <p className="muted small">資料只存在這支手機。建議定期匯出 JSON 存到雲端硬碟。</p>
+        <p className="muted small">資料只存在這支手機。建議定期匯出 JSON（完整備份）存到雲端硬碟。</p>
         <div className="btn-row">
           <button className="btn" onClick={() => run(exportJson, '已匯出 JSON')}>
-            匯出 JSON（完整備份）
+            匯出 JSON
           </button>
           <button className="btn" onClick={() => run(exportCsv, '已匯出 CSV')}>
             匯出 CSV

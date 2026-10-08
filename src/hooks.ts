@@ -1,4 +1,5 @@
 import { useLiveQuery } from 'dexie-react-hooks';
+import { useRef } from 'react';
 import { db, type Activity, type Category, type Entry, type Settings } from './db';
 import { DEFAULT_SETTINGS } from './defaults';
 import { entriesOverlapping } from './repo';
@@ -31,6 +32,10 @@ export function useSettings(): Settings {
   return useLiveQuery(() => db.settings.get('main')) ?? DEFAULT_SETTINGS;
 }
 
+/** 切換日期時，新資料載入前先沿用上一份，避免畫面閃成「載入中」而跳回頂端 */
 export function useEntries(range: Interval): Entry[] | undefined {
-  return useLiveQuery(() => entriesOverlapping(range), [range.start, range.end]);
+  const last = useRef<Entry[] | undefined>(undefined);
+  const value = useLiveQuery(() => entriesOverlapping(range), [range.start, range.end]);
+  if (value !== undefined) last.current = value;
+  return value ?? last.current;
 }
