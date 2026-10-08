@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { Activity, Category } from '../db';
 import { useCatalog } from '../hooks';
 import { archiveActivity, deleteCategory, move, saveActivity, saveCategory } from '../repo';
@@ -128,15 +129,27 @@ function ColorPicker({ value, onChange }: { value: string; onChange: (c: string)
   );
 }
 
-function ActivityForm({ initial, categories, onClose }: { initial: Partial<Activity>; categories: Category[]; onClose: () => void }) {
+export function ActivityForm({
+  initial,
+  categories,
+  onClose,
+  onSaved,
+}: {
+  initial: Partial<Activity>;
+  categories: Category[];
+  onClose: () => void;
+  onSaved?: (id: string) => void;
+}) {
   const [name, setName] = useState(initial.name ?? '');
   const [color, setColor] = useState(initial.color ?? SWATCHES[9]);
   const [categoryId, setCategoryId] = useState(initial.categoryId ?? categories[0]?.id ?? '');
+  const [longDuration, setLongDuration] = useState(initial.longDuration ?? false);
   const [error, setError] = useState('');
 
   async function submit() {
     if (!name.trim()) return setError('請輸入名稱');
-    await saveActivity({ id: initial.id, name: name.trim(), color, categoryId, detailType: initial.detailType });
+    const id = await saveActivity({ id: initial.id, name: name.trim(), color, categoryId, detailType: initial.detailType, longDuration });
+    onSaved?.(id);
     onClose();
   }
   async function remove() {
@@ -146,7 +159,7 @@ function ActivityForm({ initial, categories, onClose }: { initial: Partial<Activ
     onClose();
   }
 
-  return (
+  return createPortal(
     <div className="sheet-backdrop" onClick={onClose}>
       <div className="sheet" onClick={(e) => e.stopPropagation()}>
         <div className="sheet-body">
@@ -174,6 +187,13 @@ function ActivityForm({ initial, categories, onClose }: { initial: Partial<Activ
             <span>顏色</span>
             <ColorPicker value={color} onChange={setColor} />
           </div>
+          <label className="toggle-row">
+            <input type="checkbox" checked={longDuration} onChange={(e) => setLongDuration(e.target.checked)} />
+            <span>
+              長時間活動
+              <small className="muted">（像睡覺一樣，記錄時長度快捷鍵改為 5～10 小時）</small>
+            </span>
+          </label>
           {error && <div className="error">{error}</div>}
         </div>
         <div className="sheet-actions">
@@ -191,7 +211,8 @@ function ActivityForm({ initial, categories, onClose }: { initial: Partial<Activ
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

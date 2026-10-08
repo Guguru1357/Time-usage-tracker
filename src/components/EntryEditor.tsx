@@ -6,6 +6,7 @@ import { deleteEntry, entriesOverlapping, saveEntry } from '../repo';
 import { MIN, dayStart, fmtDateLabel, fmtDuration, fmtHM, roundTo, toDateKey } from '../time';
 import { rescheduleReminders } from '../notifications';
 import { TimeField } from './TimeField';
+import { ActivityForm } from '../views/ManageView';
 
 export type EditorTarget = { kind: 'new'; start: number; end: number } | { kind: 'edit'; entry: Entry };
 
@@ -19,6 +20,8 @@ interface Props {
 }
 
 const DAY_MIN = 24 * 60;
+const SHORT_CHIPS = [10, 30, 60, 90, 120];
+const LONG_CHIPS = [300, 360, 420, 480, 540, 600];
 
 function minToHM(m: number): string {
   const x = ((m % DAY_MIN) + DAY_MIN) % DAY_MIN;
@@ -38,6 +41,8 @@ export function EntryEditor({ target, catalog, step, onClose, onSavedNext }: Pro
   const [note, setNote] = useState(initial?.note ?? '');
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
+  /** 正在新增活動的分類 id */
+  const [addingTo, setAddingTo] = useState<string | null>(null);
 
   const start = base + startMin * MIN;
   const end = base + endMin * MIN;
@@ -75,7 +80,7 @@ export function EntryEditor({ target, catalog, step, onClose, onSavedNext }: Pro
             acts: catalog.activities.filter((a) => !catalog.categoryById.has(a.categoryId)),
           },
         ])
-        .filter((g) => g.acts.length > 0),
+        .filter((g) => g.cat.id || g.acts.length > 0),
     [catalog],
   );
 
@@ -91,6 +96,7 @@ export function EntryEditor({ target, catalog, step, onClose, onSavedNext }: Pro
     setEndMin(v);
   };
 
+  const selected = activityId ? catalog.activityById.get(activityId) : undefined;
   const now = Date.now();
   const nowMin = Math.round((roundTo(now, step, 'round') - base) / MIN);
 
@@ -144,7 +150,7 @@ export function EntryEditor({ target, catalog, step, onClose, onSavedNext }: Pro
           </div>
           <div className="chips">
             <span className="muted">長度 {end > start ? fmtDuration(end - start) : '—'}</span>
-            {[10, 30, 60, 90, 120].map((d) => (
+            {(selected?.longDuration ? LONG_CHIPS : SHORT_CHIPS).map((d) => (
               <button key={d} className="chip" onClick={() => setEndMin(startMin + d)}>
                 {d < 60 ? `${d}分` : `${d / 60}h`}
               </button>
@@ -186,6 +192,11 @@ export function EntryEditor({ target, catalog, step, onClose, onSavedNext }: Pro
                 {acts.map((a) => (
                   <ActButton key={a.id} name={a.name} color={a.color} selected={activityId === a.id} onClick={() => setActivityId(a.id)} />
                 ))}
+                {cat.id && (
+                  <button className="act-btn add" onClick={() => setAddingTo(cat.id)}>
+                    ＋ 新增活動
+                  </button>
+                )}
               </div>
             </div>
           ))}
@@ -196,6 +207,14 @@ export function EntryEditor({ target, catalog, step, onClose, onSavedNext }: Pro
           </label>
           {error && <div className="error">{error}</div>}
         </div>
+        {addingTo !== null && (
+          <ActivityForm
+            initial={{ categoryId: addingTo, color: catalog.categoryById.get(addingTo)?.color }}
+            categories={catalog.categories}
+            onClose={() => setAddingTo(null)}
+            onSaved={(id) => setActivityId(id)}
+          />
+        )}
 
         <div className="sheet-actions">
           {initial ? (

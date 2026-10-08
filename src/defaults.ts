@@ -52,6 +52,7 @@ export function defaultActivities(): Activity[] {
     color,
     order: i,
     ...(detailType ? { detailType } : {}),
+    ...(name === '睡覺' ? { longDuration: true } : {}),
   }));
 }
 

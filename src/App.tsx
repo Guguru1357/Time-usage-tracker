@@ -37,8 +37,8 @@ export function App() {
       CapApp.addListener('resume', () => void rescheduleReminders()),
       CapApp.addListener('backButton', () => {
         // 有開著的底部面板時先關面板
-        const backdrop = document.querySelector<HTMLElement>('.sheet-backdrop');
-        if (backdrop) return backdrop.click();
+        const backdrops = document.querySelectorAll<HTMLElement>('.sheet-backdrop');
+        if (backdrops.length) return backdrops[backdrops.length - 1].click();
         if (stackRef.current.length > 1) back();
         else void CapApp.minimizeApp();
       }),

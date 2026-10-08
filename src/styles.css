@@ -506,6 +506,11 @@ h3 {
   gap: 8px;
   line-height: 1.2;
 }
+.act-btn.add {
+  border: 1.5px dashed var(--muted);
+  color: var(--muted);
+  justify-content: center;
+}
 .act-btn.selected {
   color: #fff;
   font-weight: 600;

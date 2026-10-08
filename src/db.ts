@@ -19,6 +19,8 @@ export interface Activity {
   categoryId: string;
   order: number;
   detailType?: DetailType;
+  /** 長時間活動（例如睡覺）：長度快捷鍵改成 5–10 小時 */
+  longDuration?: boolean;
   /** 已刪除的活動保留下來，舊紀錄才能顯示名稱 */
   archived?: boolean;
 }
@@ -82,6 +84,15 @@ export class TimeLedgerDB extends Dexie {
       settings: 'id',
       kv: 'key',
     });
+    // v2：預設的「睡覺」標為長時間活動
+    this.version(2).upgrade((tx) =>
+      tx
+        .table('activities')
+        .toCollection()
+        .modify((a: Activity) => {
+          if (a.name === '睡覺') a.longDuration = true;
+        }),
+    );
   }
 }
 

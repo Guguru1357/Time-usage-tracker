@@ -67,14 +67,16 @@ export async function deleteCategory(id: string): Promise<void> {
 
 // ---------- 活動 ----------
 
-export async function saveActivity(a: Omit<Activity, 'id' | 'order'> & { id?: string }): Promise<void> {
+export async function saveActivity(a: Omit<Activity, 'id' | 'order'> & { id?: string }): Promise<string> {
   if (a.id) {
     const { id, ...rest } = a;
     await db.activities.update(id, rest);
-    return;
+    return id;
   }
   const max = await db.activities.orderBy('order').last();
-  await db.activities.add({ ...a, id: uid(), order: (max?.order ?? -1) + 1 });
+  const id = uid();
+  await db.activities.add({ ...a, id, order: (max?.order ?? -1) + 1 });
+  return id;
 }
 
 /** 軟刪除：舊紀錄仍能顯示活動名稱 */
