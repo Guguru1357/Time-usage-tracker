@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 自適應圖示前景：時鐘（108dp 畫布，內容置中於安全區 66dp 內） -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group android:translateX="30" android:translateY="30">
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M24,4C12.96,4 4,12.96 4,24s8.96,20 20,20 20,-8.96 20,-20S35.04,4 24,4zM24,40c-8.82,0 -16,-7.18 -16,-16S15.18,8 24,8s16,7.18 16,16 -7.18,16 -16,16z" />
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M25,14h-3v12l10.5,6.3 1.5,-2.46 -9,-5.34z" />
+        <path
+            android:fillColor="#FFFCA5A5"
+            android:pathData="M24,8A16,16 0,0 1,40 24L24,24z" />
+    </group>
+</vector>

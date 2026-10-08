@@ -1,0 +1,69 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: ['main', 'claude/**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck & test
+        run: |
+          npm run typecheck
+          npm test
+
+      - name: Build web
+        run: npm run build
+
+      - name: Sync Capacitor
+        run: npx cap sync android
+
+      - name: Build APK
+        working-directory: android
+        run: ./gradlew assembleDebug --no-daemon
+
+      - name: Rename APK
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk time-ledger.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: time-ledger-apk
+          path: time-ledger.apk
+
+      # 推送後把最新 APK 放到固定的 Release，手機直接下載安裝
+      - name: Publish to "apk-latest" release
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete apk-latest --cleanup-tag -y || true
+          gh release create apk-latest time-ledger.apk \
+            --prerelease \
+            --target "$GITHUB_SHA" \
+            --title "最新 APK（#${GITHUB_RUN_NUMBER}）" \
+            --notes "分支：${GITHUB_REF_NAME}　commit：${GITHUB_SHA::7}。在手機上下載 time-ledger.apk 安裝即可，之後的版本可直接覆蓋安裝，資料會保留。"
