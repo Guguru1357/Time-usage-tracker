@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { type EditorTarget, EntryEditor } from '../components/EntryEditor';
 import { IconChevronLeft } from '../components/Icons';
+import { entrySummary } from '../study';
 import { useCatalog, useEntries, useSettings } from '../hooks';
 import { entriesOverlapping } from '../repo';
 import { MIN, clipToNow, findGaps, fmtDateLabel, fmtDuration, fmtHMRel, periodsForDay, todayKey } from '../time';
@@ -93,7 +94,10 @@ export function ReviewView({ dateKey, reminderId, onBack }: Props) {
                 </span>
                 <span className={`entry-name${cat?.highlight ? ' sns-text' : ''}`}>
                   {a?.name ?? '（已刪除）'}
-                  {e.note && <small> · {e.note}</small>}
+                  {(() => {
+                    const s = entrySummary(e, (id) => catalog.activityById.get(id)?.name);
+                    return s && <small> · {s}</small>;
+                  })()}
                 </span>
               </button>
             );

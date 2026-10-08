@@ -1,18 +1,22 @@
 import { App as CapApp } from '@capacitor/app';
 import { useEffect, useRef, useState } from 'react';
-import { IconClock, IconList, IconSettings } from './components/Icons';
+import { IconChart, IconClock, IconList, IconSettings } from './components/Icons';
 import { useSettings } from './hooks';
 import { isNative, onReviewNotificationTap, rescheduleReminders } from './notifications';
 import { applyTheme } from './theme';
+import { UpdateSheet } from './components/UpdateSheet';
+import { autoCheck, type UpdateInfo } from './updater';
 import { todayKey } from './time';
 import { DayView } from './views/DayView';
 import { ManageView } from './views/ManageView';
 import { ReviewView } from './views/ReviewView';
 import { SettingsView } from './views/SettingsView';
+import { StatsView } from './views/StatsView';
 
 type Route =
   | { name: 'day'; date: string }
   | { name: 'review'; date: string; reminderId: string }
+  | { name: 'stats' }
   | { name: 'manage' }
   | { name: 'settings' };
 
@@ -20,6 +24,9 @@ export function App() {
   const [stack, setStack] = useState<Route[]>([{ name: 'day', date: todayKey() }]);
   const route = stack[stack.length - 1];
   const theme = useSettings().theme;
+  const [update, setUpdate] = useState<UpdateInfo | null>(null);
+  const [updateOpen, setUpdateOpen] = useState(false);
+  const [updateDismissed, setUpdateDismissed] = useState(false);
   useEffect(() => applyTheme(theme), [theme]);
   const stackRef = useRef(stack);
   stackRef.current = stack;
@@ -34,12 +41,17 @@ export function App() {
 
   useEffect(() => {
     void rescheduleReminders();
+    const check = () => void autoCheck().then((u) => u && setUpdate(u));
+    check();
     onReviewNotificationTap((t) => {
       setStack([{ name: 'day', date: t.date }, { name: 'review', date: t.date, reminderId: t.reminderId }]);
     });
     if (!isNative) return;
     const subs = [
-      CapApp.addListener('resume', () => void rescheduleReminders()),
+      CapApp.addListener('resume', () => {
+        void rescheduleReminders();
+        check();
+      }),
       CapApp.addListener('backButton', () => {
         // 有開著的底部面板時先關面板
         const backdrops = document.querySelectorAll<HTMLElement>('.sheet-backdrop');
@@ -54,6 +66,17 @@ export function App() {
   return (
     <div className="app">
       <main>
+        {update && !updateDismissed && (
+          <div className="update-banner">
+            <span>有新版本 #{update.build}</span>
+            <button className="text-btn" onClick={() => setUpdateDismissed(true)}>
+              稍後
+            </button>
+            <button className="btn primary sm" onClick={() => setUpdateOpen(true)}>
+              查看
+            </button>
+          </div>
+        )}
         {route.name === 'day' && (
           <DayView
             dateKey={route.date}
@@ -62,13 +85,27 @@ export function App() {
           />
         )}
         {route.name === 'review' && <ReviewView dateKey={route.date} reminderId={route.reminderId} onBack={back} />}
+        {route.name === 'stats' && <StatsView />}
         {route.name === 'manage' && <ManageView />}
         {route.name === 'settings' && <SettingsView />}
       </main>
+      {update && updateOpen && (
+        <UpdateSheet
+          info={update}
+          onClose={() => {
+            setUpdateOpen(false);
+            setUpdateDismissed(true);
+          }}
+        />
+      )}
       <nav className="tabbar">
         <button className={route.name === 'day' || route.name === 'review' ? 'active' : ''} onClick={() => tab({ name: 'day', date: todayKey() })}>
           <IconClock />
           時間軸
+        </button>
+        <button className={route.name === 'stats' ? 'active' : ''} onClick={() => tab({ name: 'stats' })}>
+          <IconChart />
+          統計
         </button>
         <button className={route.name === 'manage' ? 'active' : ''} onClick={() => tab({ name: 'manage' })}>
           <IconList />

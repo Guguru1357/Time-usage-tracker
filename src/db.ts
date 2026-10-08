@@ -25,9 +25,24 @@ export interface Activity {
   archived?: boolean;
 }
 
+/** 學習細節，欄位皆選填 */
+export interface StudyDetails {
+  /** 書名／教材名稱 */
+  title?: string;
+  /** 頁數、章節或主題 */
+  progress?: string;
+  /** 文法（語言類） */
+  grammar?: string[];
+  /** 單字（語言類） */
+  vocab?: string[];
+}
+
 export interface SecondaryActivity {
   activityId: string;
+  /** 一般細節（例如聽了什麼音樂） */
   detail?: string;
+  /** 副活動是學習類時的細節（例如在火車上讀的書） */
+  study?: StudyDetails;
 }
 
 export interface Entry {
@@ -38,10 +53,10 @@ export interface Entry {
   end: number;
   activityId: string;
   note?: string;
-  /** 同時進行的副活動（第二階段） */
+  /** 同時進行的副活動 */
   secondary?: SecondaryActivity[];
-  /** 學習細節（第二階段） */
-  details?: Record<string, unknown>;
+  /** 主活動是學習類時的細節 */
+  details?: StudyDetails;
   createdAt: number;
   updatedAt: number;
 }
@@ -62,6 +77,8 @@ export interface Settings {
   id: 'main';
   /** 外觀，未設定時為淺色 */
   theme?: ThemeMode;
+  /** 自動檢查更新，未設定時為開啟 */
+  autoUpdate?: boolean;
   /** 時間刻度（分鐘） */
   step: number;
   reminders: Reminder[];

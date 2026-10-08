@@ -1,12 +1,13 @@
-import { useLiveQuery } from 'dexie-react-hooks';
-import { useEffect, useMemo, useState } from 'react';
-import { db, type Entry } from '../db';
+import { useEffect, useState } from 'react';
+import type { Entry, SecondaryActivity, StudyDetails } from '../db';
 import type { Catalog } from '../hooks';
 import { deleteEntry, entriesOverlapping, saveEntry } from '../repo';
 import { MIN, dayStart, fmtDateLabel, fmtDuration, fmtHM, roundTo, toDateKey } from '../time';
 import { rescheduleReminders } from '../notifications';
+import { cleanStudy, rememberTitle } from '../study';
+import { ActButton, ActivityPicker, ActivityPickerSheet } from './ActivityPicker';
+import { StudyFields } from './StudyFields';
 import { TimeField } from './TimeField';
-import { ActivityForm } from '../views/ManageView';
 
 export type EditorTarget = { kind: 'new'; start: number; end: number } | { kind: 'edit'; entry: Entry };
 
@@ -41,22 +42,14 @@ export function EntryEditor({ target, catalog, step, onClose, onSavedNext }: Pro
   const [note, setNote] = useState(initial?.note ?? '');
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
-  /** 正在新增活動的分類 id */
-  const [addingTo, setAddingTo] = useState<string | null>(null);
+  const [details, setDetails] = useState<StudyDetails>(initial?.details ?? {});
+  const [secondary, setSecondary] = useState<SecondaryActivity[]>(initial?.secondary ?? []);
+  /** 新紀錄一開始展開活動清單；選好後收合 */
+  const [pickerOpen, setPickerOpen] = useState(!initial);
+  const [secondaryPicker, setSecondaryPicker] = useState(false);
 
   const start = base + startMin * MIN;
   const end = base + endMin * MIN;
-
-  const recent = useLiveQuery(async () => {
-    const last = await db.entries.orderBy('start').reverse().limit(60).toArray();
-    const ids: string[] = [];
-    for (const e of last) if (!ids.includes(e.activityId)) ids.push(e.activityId);
-    return ids;
-  });
-  const recentActs = (recent ?? [])
-    .map((id) => catalog.activityById.get(id))
-    .filter((a) => a && !a.archived)
-    .slice(0, 6);
 
   const [overlaps, setOverlaps] = useState<Entry[]>([]);
   useEffect(() => {
@@ -69,20 +62,6 @@ export function EntryEditor({ target, catalog, step, onClose, onSavedNext }: Pro
       alive = false;
     };
   }, [start, end, initial?.id]);
-
-  const grouped = useMemo(
-    () =>
-      catalog.categories
-        .map((c) => ({ cat: c, acts: catalog.activities.filter((a) => a.categoryId === c.id) }))
-        .concat([
-          {
-            cat: { id: '', name: '未分類', color: '#94a3b8', highlight: false, order: 999 },
-            acts: catalog.activities.filter((a) => !catalog.categoryById.has(a.categoryId)),
-          },
-        ])
-        .filter((g) => g.cat.id || g.acts.length > 0),
-    [catalog],
-  );
 
   const setStart = (m: number) => {
     const clamped = Math.max(0, Math.min(DAY_MIN - step, m));
@@ -105,6 +84,16 @@ export function EntryEditor({ target, catalog, step, onClose, onSavedNext }: Pro
     if (end <= start) return setError('結束時間必須晚於開始時間');
     setSaving(true);
     try {
+      const studyType = catalog.activityById.get(activityId)?.detailType;
+      const cleanedSecondary = secondary
+        .filter((x) => x.activityId !== activityId)
+        .map((x): SecondaryActivity => {
+          const type = catalog.activityById.get(x.activityId)?.detailType;
+          return {
+            activityId: x.activityId,
+            ...(type ? { study: cleanStudy(x.study) } : { detail: x.detail?.trim() || undefined }),
+          };
+        });
       const saved = await saveEntry({
         ...(initial ?? {}),
         id: initial?.id,
@@ -112,7 +101,14 @@ export function EntryEditor({ target, catalog, step, onClose, onSavedNext }: Pro
         end,
         activityId,
         note: note.trim() || undefined,
+        details: studyType ? cleanStudy(details) : undefined,
+        secondary: cleanedSecondary.length ? cleanedSecondary : undefined,
       });
+      if (studyType) void rememberTitle(studyType, details.title);
+      for (const x of cleanedSecondary) {
+        const type = catalog.activityById.get(x.activityId)?.detailType;
+        if (type) void rememberTitle(type, x.study?.title);
+      }
       void rescheduleReminders();
       if (next && onSavedNext) onSavedNext(saved);
       else onClose();
@@ -172,33 +168,63 @@ export function EntryEditor({ target, catalog, step, onClose, onSavedNext }: Pro
             </div>
           )}
 
-          {recentActs.length > 0 && (
+          <div className="section-label">做了什麼</div>
+          {selected && !pickerOpen ? (
+            <div className="selected-row">
+              <ActButton name={selected.name} color={selected.color} selected onClick={() => setPickerOpen(true)} />
+              <button className="text-btn" onClick={() => setPickerOpen(true)}>
+                更換
+              </button>
+            </div>
+          ) : (
+            <ActivityPicker
+              catalog={catalog}
+              selectedId={activityId}
+              onSelect={(id) => {
+                setActivityId(id);
+                setPickerOpen(false);
+              }}
+            />
+          )}
+
+          {selected?.detailType && !pickerOpen && (
+            <StudyFields type={selected.detailType} value={details} onChange={setDetails} />
+          )}
+
+          {!pickerOpen && (
             <>
-              <div className="group-label">最近使用</div>
-              <div className="act-grid">
-                {recentActs.map((a) => (
-                  <ActButton key={a!.id} name={a!.name} color={a!.color} selected={activityId === a!.id} onClick={() => setActivityId(a!.id)} />
-                ))}
-              </div>
+              <div className="section-label">同時進行</div>
+              {secondary.map((x, i) => {
+                const a = catalog.activityById.get(x.activityId);
+                const update = (patch: Partial<SecondaryActivity>) =>
+                  setSecondary((list) => list.map((y, j) => (j === i ? { ...y, ...patch } : y)));
+                return (
+                  <div key={`${x.activityId}-${i}`} className="secondary">
+                    <div className="secondary-head">
+                      <span className="dot" style={{ background: a?.color }} />
+                      <span className="secondary-name">{a?.name ?? '（已刪除）'}</span>
+                      <button className="text-btn" onClick={() => setSecondary((list) => list.filter((_, j) => j !== i))}>
+                        移除
+                      </button>
+                    </div>
+                    {a?.detailType ? (
+                      <StudyFields type={a.detailType} value={x.study ?? {}} onChange={(study) => update({ study })} />
+                    ) : (
+                      <input
+                        className="plain-input"
+                        value={x.detail ?? ''}
+                        placeholder="細節（選填），例如聽了什麼、看了什麼"
+                        onChange={(e) => update({ detail: e.target.value })}
+                      />
+                    )}
+                  </div>
+                );
+              })}
+              <button className="add-row" onClick={() => setSecondaryPicker(true)}>
+                ＋ 加入同時進行的活動
+              </button>
             </>
           )}
-          {grouped.map(({ cat, acts }) => (
-            <div key={cat.id || 'none'}>
-              <div className="group-label">
-                <span className={cat.highlight ? 'sns-text' : ''}>{cat.name}</span>
-                {cat.id && (
-                  <button className="group-add" onClick={() => setAddingTo(cat.id)}>
-                    ＋ 新增
-                  </button>
-                )}
-              </div>
-              <div className="act-grid">
-                {acts.map((a) => (
-                  <ActButton key={a.id} name={a.name} color={a.color} selected={activityId === a.id} onClick={() => setActivityId(a.id)} />
-                ))}
-              </div>
-            </div>
-          ))}
 
           <label className="field">
             <span>備註（選填）</span>
@@ -206,15 +232,15 @@ export function EntryEditor({ target, catalog, step, onClose, onSavedNext }: Pro
           </label>
           {error && <div className="error">{error}</div>}
         </div>
-        {addingTo !== null && (
-          <ActivityForm
-            initial={{ categoryId: addingTo, color: catalog.categoryById.get(addingTo)?.color }}
-            categories={catalog.categories}
-            onClose={() => setAddingTo(null)}
-            onSaved={(id) => setActivityId(id)}
+        {secondaryPicker && (
+          <ActivityPickerSheet
+            title="同時進行的活動"
+            catalog={catalog}
+            excludeIds={[...(activityId ? [activityId] : []), ...secondary.map((x) => x.activityId)]}
+            onSelect={(id) => setSecondary((list) => [...list, { activityId: id }])}
+            onClose={() => setSecondaryPicker(false)}
           />
         )}
-
         <div className="sheet-actions">
           {initial ? (
             <button className="btn danger-ghost" onClick={remove}>
@@ -258,18 +284,5 @@ function TimeRow(props: { label: string; value: string; suffix?: string; onStep:
       </button>
       {props.suffix && <span className="badge">{props.suffix}</span>}
     </div>
-  );
-}
-
-function ActButton(props: { name: string; color: string; selected: boolean; onClick: () => void }) {
-  return (
-    <button
-      className={`act-btn${props.selected ? ' selected' : ''}`}
-      style={{ ['--c' as string]: props.color }}
-      onClick={props.onClick}
-    >
-      <span className="dot" />
-      {props.name}
-    </button>
   );
 }

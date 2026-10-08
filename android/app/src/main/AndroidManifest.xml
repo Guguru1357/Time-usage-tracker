@@ -40,4 +40,6 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- 回顧提醒需要準時觸發；自行安裝（非 Play 商店）時直接授予，不必到設定開啟 -->
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <!-- App 內更新：下載新版 APK 後開啟系統安裝畫面 -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 </manifest>

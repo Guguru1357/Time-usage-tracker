@@ -60,10 +60,17 @@ jobs:
         if: github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
+        # App 內的「檢查更新」會讀 build 編號與 RELEASE_NOTES.md 的內容
         run: |
+          {
+            echo "<!-- build:${GITHUB_RUN_NUMBER} sha:${GITHUB_SHA::7} branch:${GITHUB_REF_NAME} -->"
+            cat RELEASE_NOTES.md
+            echo
+            echo "<!-- 在手機上下載 time-ledger.apk 即可覆蓋安裝，資料會保留。 -->"
+          } > release-notes.md
           gh release delete apk-latest --cleanup-tag -y || true
           gh release create apk-latest time-ledger.apk \
             --prerelease \
             --target "$GITHUB_SHA" \
             --title "最新 APK（#${GITHUB_RUN_NUMBER}）" \
-            --notes "分支：${GITHUB_REF_NAME}　commit：${GITHUB_SHA::7}。在手機上下載 time-ledger.apk 安裝即可，之後的版本可直接覆蓋安裝，資料會保留。"
+            --notes-file release-notes.md

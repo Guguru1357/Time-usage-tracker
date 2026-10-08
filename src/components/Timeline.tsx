@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import type { Entry } from '../db';
 import type { Catalog } from '../hooks';
+import { entrySummary } from '../study';
 import { MIN, assignLanes, clipToNow, dayEnd, dayStart, findGaps, fmtDuration, fmtHM, type Interval } from '../time';
 
 const PX_PER_MIN = 1.1;
@@ -29,6 +30,7 @@ export function Timeline({ dateKey, entries, catalog, onEntry, onGap }: Props) {
   const gapRange = isToday ? clipToNow({ start, end }, now) : { start, end };
   const gaps = start > now ? [] : findGaps(gapRange, clipped, 10 * MIN);
 
+  const summary = (e: Entry) => entrySummary(e, (id) => catalog.activityById.get(id)?.name);
   const y = (ms: number) => ((ms - start) / MIN) * PX_PER_MIN;
 
   // 打開時捲到「現在」附近，不是今天就捲到第一個空白或早上
@@ -85,7 +87,7 @@ export function Timeline({ dateKey, entries, catalog, onEntry, onGap }: Props) {
                   {h >= 34 && (
                     <small>
                       {fmtHM(item.entry.start)}–{fmtHM(item.entry.end)}
-                      {item.entry.note ? ` · ${item.entry.note}` : ''}
+                      {summary(item.entry) && ` · ${summary(item.entry)}`}
                     </small>
                   )}
                 </span>

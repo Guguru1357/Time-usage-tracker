@@ -1,7 +1,7 @@
 import { Capacitor } from '@capacitor/core';
 import { Directory, Encoding, Filesystem } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
-import { db, type Activity, type Category, type Entry, type Settings } from './db';
+import { db, type Activity, type Category, type Entry, type Settings, type StudyDetails } from './db';
 import { DEFAULT_SETTINGS } from './defaults';
 import { MIN, fmtHM, toDateKey } from './time';
 
@@ -34,11 +34,22 @@ export async function buildCsv(): Promise<string> {
   const { categories, activities, entries } = await buildBackup();
   const act = new Map(activities.map((a) => [a.id, a]));
   const cat = new Map(categories.map((c) => [c.id, c]));
-  const rows: (string | number)[][] = [['日期', '開始', '結束', '分鐘', '活動', '分類', '副活動', '備註']];
+  const rows: (string | number)[][] = [['日期', '開始', '結束', '分鐘', '活動', '分類', '學習細節', '副活動', '備註']];
+  const study = (d?: StudyDetails) =>
+    d
+      ? [
+          d.title && `《${d.title}》`,
+          d.progress,
+          d.grammar?.length && `文法：${d.grammar.join('／')}`,
+          d.vocab?.length && `單字：${d.vocab.join('／')}`,
+        ]
+          .filter(Boolean)
+          .join(' ')
+      : '';
   for (const e of entries) {
     const a = act.get(e.activityId);
     const secondary = (e.secondary ?? [])
-      .map((s) => [act.get(s.activityId)?.name ?? '?', s.detail].filter(Boolean).join(':'))
+      .map((s) => [act.get(s.activityId)?.name ?? '?', s.detail, study(s.study)].filter(Boolean).join(':'))
       .join(' / ');
     rows.push([
       toDateKey(e.start),
@@ -47,6 +58,7 @@ export async function buildCsv(): Promise<string> {
       Math.round((e.end - e.start) / MIN),
       a?.name ?? '（已刪除）',
       (a && cat.get(a.categoryId)?.name) ?? '未分類',
+      study(e.details),
       secondary,
       e.note ?? '',
     ]);

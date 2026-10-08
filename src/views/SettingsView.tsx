@@ -13,6 +13,8 @@ import {
   sendTestNotification,
 } from '../notifications';
 import { updateSettings } from '../repo';
+import { UpdateSheet } from '../components/UpdateSheet';
+import { CURRENT_BUILD, checkForUpdate, type UpdateInfo } from '../updater';
 
 export function SettingsView() {
   const settings = useSettings();
@@ -21,6 +23,23 @@ export function SettingsView() {
   const [scheduled, setScheduled] = useState<number | null>(null);
   const [msg, setMsg] = useState('');
   const fileInput = useRef<HTMLInputElement>(null);
+  const [checking, setChecking] = useState(false);
+  const [updateResult, setUpdateResult] = useState('');
+  const [update, setUpdate] = useState<UpdateInfo | null>(null);
+
+  async function onCheckUpdate() {
+    setChecking(true);
+    setUpdateResult('');
+    try {
+      const u = await checkForUpdate();
+      if (u) setUpdate(u);
+      else setUpdateResult('已經是最新版本');
+    } catch (e) {
+      setUpdateResult(`檢查失敗：${(e as Error).message}`);
+    } finally {
+      setChecking(false);
+    }
+  }
 
   async function refreshStatus() {
     setPerm(await notificationPermission());
@@ -193,6 +212,32 @@ export function SettingsView() {
           }}
         />
       </section>
+      <section className="card">
+        <h3>App 更新</h3>
+        <div className="status-row">
+          <span>目前版本</span>
+          <span className="muted">{CURRENT_BUILD ? `#${CURRENT_BUILD}` : '開發版'}</span>
+        </div>
+        <div className="status-row">
+          <span>
+            自動檢查更新
+            <small className="muted block-note">打開 App 時檢查（每 6 小時最多一次），有新版會提示</small>
+          </span>
+          <label className="switch">
+            <input
+              type="checkbox"
+              checked={settings.autoUpdate !== false}
+              onChange={(e) => updateSettings({ autoUpdate: e.target.checked })}
+            />
+            <span />
+          </label>
+        </div>
+        <button className="btn block" disabled={checking} onClick={onCheckUpdate}>
+          {checking ? '檢查中…' : '檢查更新'}
+        </button>
+        {updateResult && <p className="muted small center">{updateResult}</p>}
+      </section>
+      {update && <UpdateSheet info={update} onClose={() => setUpdate(null)} />}
       <p className="muted small center">時間記帳 v{__APP_VERSION__}</p>
     </div>
   );

@@ -1,6 +1,16 @@
 import { useState } from 'react';
 import { createPortal } from 'react-dom';
-import type { Activity, Category } from '../db';
+import type { Activity, Category, DetailType } from '../db';
+
+// 欄位組合；日文與英文欄位相同，統計時依活動分開
+const FIELD_OPTIONS: [DetailType | undefined, string][] = [
+  [undefined, '無'],
+  ['reading', '書名＋頁數'],
+  ['japanese', '教材＋文法＋單字'],
+  ['medical', '書名＋章節'],
+];
+const sameFields = (a: DetailType | undefined, b: DetailType | undefined) =>
+  a === b || (a === 'english' && b === 'japanese') || (a === 'japanese' && b === 'english');
 import { useCatalog } from '../hooks';
 import { archiveActivity, deleteCategory, move, saveActivity, saveCategory } from '../repo';
 
@@ -141,11 +151,12 @@ export function ActivityForm({
   const [color, setColor] = useState(initial.color ?? SWATCHES[9]);
   const [categoryId, setCategoryId] = useState(initial.categoryId ?? categories[0]?.id ?? '');
   const [longDuration, setLongDuration] = useState(initial.longDuration ?? false);
+  const [detailType, setDetailType] = useState<DetailType | undefined>(initial.detailType);
   const [error, setError] = useState('');
 
   async function submit() {
     if (!name.trim()) return setError('請輸入名稱');
-    const id = await saveActivity({ id: initial.id, name: name.trim(), color, categoryId, detailType: initial.detailType, longDuration });
+    const id = await saveActivity({ id: initial.id, name: name.trim(), color, categoryId, detailType, longDuration });
     onSaved?.(id);
     onClose();
   }
@@ -182,6 +193,20 @@ export function ActivityForm({
           <div className="field">
             <span>顏色</span>
             <ColorPicker value={color} onChange={setColor} />
+          </div>
+          <div className="field">
+            <span>學習細節欄位</span>
+            <div className="chips">
+              {FIELD_OPTIONS.map(([t, label]) => (
+                <button
+                  key={t ?? 'none'}
+                  className={`chip${sameFields(detailType, t) ? ' selected' : ''}`}
+                  onClick={() => !sameFields(detailType, t) && setDetailType(t)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
           </div>
           <label className="toggle-row">
             <input type="checkbox" checked={longDuration} onChange={(e) => setLongDuration(e.target.checked)} />

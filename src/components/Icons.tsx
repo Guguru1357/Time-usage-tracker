@@ -58,3 +58,9 @@ export const IconPlus = ({ size = 22 }: { size?: number }) => (
     <path d="M12 5v14M5 12h14" />
   </Svg>
 );
+
+export const IconChart = () => (
+  <Svg>
+    <path d="M5 19V11M12 19V5M19 19v-6" />
+  </Svg>
+);
