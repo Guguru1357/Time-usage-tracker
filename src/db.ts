@@ -148,6 +148,133 @@ export interface HabitLog {
   count: number;
 }
 
+// ---------- 錢包 ----------
+
+export interface ExpenseCat {
+  id: string;
+  name: string;
+  emoji: string;
+  color: string;
+  order: number;
+}
+
+export type Meal = 'meal' | 'snack';
+
+export interface Expense {
+  id: string;
+  /** YYYY-MM-DD */
+  date: string;
+  /** TWD */
+  amount: number;
+  cat: string;
+  /** 餐飲才有：正餐／點心 */
+  meal?: Meal;
+  item: string;
+  note?: string;
+  createdAt: number;
+}
+
+/** 記過的品項，下次一鍵帶入；id = `${cat}|${meal}|${item}` */
+export interface QuickItem {
+  id: string;
+  cat: string;
+  meal?: Meal;
+  item: string;
+  amount: number;
+  count: number;
+  last: number;
+}
+
+export type SubStatus = 'active' | 'considering' | 'cancelled';
+
+export interface Subscription {
+  id: string;
+  name: string;
+  amount: number;
+  currency: 'TWD' | 'USD';
+  cycle: 'monthly' | 'yearly';
+  /** 1–31 */
+  billingDay?: number;
+  /** 1–12，年繳才用 */
+  billingMonth?: number;
+  payment?: string;
+  category: 'video' | 'tool' | 'shopping' | 'other';
+  status: SubStatus;
+  lastReviewed?: string;
+}
+
+export interface GiftLog {
+  id: string;
+  date: string;
+  /** 正數加值、負數使用 */
+  amount: number;
+  kind: 'init' | 'use' | 'add' | 'set';
+  note?: string;
+}
+
+export interface GiftCard {
+  id: string;
+  name: string;
+  emoji: string;
+  unit: 'money' | 'points';
+  /** 每張面額；有值時以張數顯示 */
+  denom?: number;
+  expiry?: string;
+  place?: string;
+  created: number;
+  log: GiftLog[];
+}
+
+export interface Account {
+  id: string;
+  name: string;
+  /** 郵局、銀行、現金、證券交割戶… */
+  kind: 'bank' | 'post' | 'cash' | 'broker' | 'other';
+  order: number;
+  archived?: boolean;
+}
+
+/** 帳戶在某天的餘額；最新一筆就是目前餘額 */
+export interface Balance {
+  id: string;
+  accountId: string;
+  date: string;
+  amount: number;
+  createdAt: number;
+}
+
+export interface Income {
+  id: string;
+  date: string;
+  amount: number;
+  kind: 'salary' | 'bonus' | 'other';
+  note?: string;
+  /** 入帳的帳戶 */
+  accountId?: string;
+}
+
+export type Emotion = 'calm' | 'fomo' | 'fear' | 'greed' | 'revenge' | 'bored' | 'impulse';
+
+export interface Trade {
+  id: string;
+  date: string;
+  /** HH:MM，選填 */
+  time?: string;
+  side: 'buy' | 'sell';
+  /** 股票代號，例如 2330 */
+  symbol: string;
+  name?: string;
+  price: number;
+  /** 股數（1 張 = 1000 股） */
+  shares: number;
+  fee?: number;
+  emotion: Emotion;
+  /** 是否照事先的計畫 */
+  planned: boolean;
+  reason?: string;
+  createdAt: number;
+}
+
 export type ThemeMode = 'light' | 'dark' | 'system';
 
 export interface Settings {
@@ -160,6 +287,12 @@ export interface Settings {
   step: number;
   /** 安排的提醒提前幾分鐘，未設定為準時 */
   planLead?: number;
+  /** USD → TWD 匯率（訂閱換算用） */
+  usdRate?: number;
+  /** 每月幾號提醒輸入薪資；0 或未設定為關閉，預設 7 */
+  salaryDay?: number;
+  /** 開盤日提醒記錄股票進出的時間；空字串為關閉，預設 14:00 */
+  tradeTime?: string;
   reminders: Reminder[];
 }
 
@@ -177,6 +310,15 @@ export class TimeLedgerDB extends Dexie {
   plans!: EntityTable<Plan, 'id'>;
   habits!: EntityTable<Habit, 'id'>;
   habitLogs!: EntityTable<HabitLog, 'id'>;
+  expenseCats!: EntityTable<ExpenseCat, 'id'>;
+  expenses!: EntityTable<Expense, 'id'>;
+  quickItems!: EntityTable<QuickItem, 'id'>;
+  subscriptions!: EntityTable<Subscription, 'id'>;
+  giftCards!: EntityTable<GiftCard, 'id'>;
+  accounts!: EntityTable<Account, 'id'>;
+  balances!: EntityTable<Balance, 'id'>;
+  incomes!: EntityTable<Income, 'id'>;
+  trades!: EntityTable<Trade, 'id'>;
 
   constructor(name = 'time-ledger') {
     super(name);
@@ -207,6 +349,22 @@ export class TimeLedgerDB extends Dexie {
           await tx.table('habits').bulkAdd(defaultHabits(acts));
         }
       });
+    // v4：錢包（記帳、訂閱、禮券、資產、股票）
+    this.version(4)
+      .stores({
+        expenseCats: 'id, order',
+        expenses: 'id, date, cat',
+        quickItems: 'id, cat',
+        subscriptions: 'id',
+        giftCards: 'id',
+        accounts: 'id, order',
+        balances: 'id, accountId, date',
+        incomes: 'id, date',
+        trades: 'id, date, symbol',
+      })
+      .upgrade(async (tx) => {
+        if ((await tx.table('expenseCats').count()) === 0) await tx.table('expenseCats').bulkAdd(defaultExpenseCats());
+      });
   }
 }
 
@@ -230,6 +388,20 @@ export function defaultHabits(activities: Activity[]): Habit[] {
     order: i,
     ...(activityId ? { activityId } : {}),
   }));
+}
+
+/** 預設支出分類；顏色刻意用低彩度 */
+export function defaultExpenseCats(): ExpenseCat[] {
+  const list: [string, string, string, string][] = [
+    ['food', '餐飲', '🍱', '#7f9bb8'],
+    ['transport', '交通', '🚇', '#c29a78'],
+    ['shopping', '購物', '🛍️', '#86a894'],
+    ['fun', '娛樂', '🎮', '#c4b07a'],
+    ['daily', '生活日用', '🧻', '#b597a8'],
+    ['health', '醫療', '💊', '#8fa37f'],
+    ['other', '其他', '📦', '#9a96b3'],
+  ];
+  return list.map(([id, name, emoji, color], order) => ({ id, name, emoji, color, order }));
 }
 
 export const db = new TimeLedgerDB();

@@ -1,6 +1,6 @@
 import { App as CapApp } from '@capacitor/app';
 import { useEffect, useRef, useState } from 'react';
-import { IconChart, IconClock, IconHome, IconSettings, IconToday } from './components/Icons';
+import { IconClock, IconHome, IconSettings, IconToday, IconWallet } from './components/Icons';
 import { useSettings } from './hooks';
 import { isNative, onNotificationTap, rescheduleReminders } from './notifications';
 import { applyTheme } from './theme';
@@ -14,6 +14,7 @@ import { ReviewView } from './views/ReviewView';
 import { SettingsView } from './views/SettingsView';
 import { StatsView } from './views/StatsView';
 import { TodayView, type PlanFocus } from './views/TodayView';
+import { WalletView, type WalletFocus, type WalletPage } from './views/WalletView';
 
 type Route =
   | { name: 'home' }
@@ -21,6 +22,7 @@ type Route =
   | { name: 'day'; date: string }
   | { name: 'review'; date: string; reminderId: string }
   | { name: 'stats' }
+  | { name: 'wallet'; page: WalletPage; focus?: WalletFocus }
   | { name: 'manage' }
   | { name: 'settings' };
 
@@ -47,6 +49,7 @@ export function App() {
     onNotificationTap({
       review: (t) => setStack([{ name: 'home' }, { name: 'day', date: t.date }, { name: 'review', date: t.date, reminderId: t.reminderId }]),
       plan: (t) => setStack([{ name: 'home' }, { name: 'today', date: t.date, focus: { planId: t.planId, done: t.done, nonce: Date.now() } }]),
+      wallet: (t) => setStack([{ name: 'home' }, { name: 'wallet', page: t.wallet, focus: { date: t.date, action: t.action, nonce: Date.now() } }]),
     });
     if (!isNative) return;
     const subs = [
@@ -81,7 +84,13 @@ export function App() {
         )}
         {route.name === 'home' && (
           <HomeView
-            onOpen={(t) => (t === 'today' || t === 'day' ? tab({ name: t, date: todayKey() }) : tab({ name: t }))}
+            onOpen={(t) =>
+              t === 'today' || t === 'day'
+                ? tab({ name: t, date: todayKey() })
+                : t === 'stats'
+                  ? tab({ name: 'stats' })
+                  : tab({ name: 'wallet', page: t })
+            }
           />
         )}
         {route.name === 'today' && (
@@ -101,7 +110,10 @@ export function App() {
         {route.name === 'review' && <ReviewView dateKey={route.date} reminderId={route.reminderId} onBack={back} />}
         {route.name === 'stats' && <StatsView />}
         {route.name === 'manage' && <ManageView />}
-        {route.name === 'settings' && <SettingsView />}
+        {route.name === 'settings' && <SettingsView onManage={() => push({ name: 'manage' })} />}
+        {route.name === 'wallet' && (
+          <WalletView page={route.page} focus={route.focus} onPage={(p) => setStack((s) => [...s.slice(0, -1), { name: 'wallet', page: p }])} />
+        )}
       </main>
       {update && updateOpen && (
         <UpdateSheet
@@ -125,11 +137,11 @@ export function App() {
           <IconClock />
           時間軸
         </button>
-        <button className={route.name === 'stats' ? 'active' : ''} onClick={() => tab({ name: 'stats' })}>
-          <IconChart />
-          統計
+        <button className={route.name === 'wallet' ? 'active' : ''} onClick={() => tab({ name: 'wallet', page: 'ledger' })}>
+          <IconWallet />
+          錢包
         </button>
-        <button className={route.name === 'settings' ? 'active' : ''} onClick={() => tab({ name: 'settings' })}>
+        <button className={route.name === 'settings' || route.name === 'manage' ? 'active' : ''} onClick={() => tab({ name: 'settings' })}>
           <IconSettings />
           設定
         </button>

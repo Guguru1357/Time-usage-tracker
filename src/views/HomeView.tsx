@@ -1,11 +1,11 @@
 import { useMemo, type ReactNode } from 'react';
-import { IconChart, IconClock, IconList, IconToday } from '../components/Icons';
+import { IconAsset, IconChart, IconClock, IconStock, IconToday, IconWallet } from '../components/Icons';
 import { activitiesByDate, habitDay, isScheduled } from '../habits';
 import { useCatalog, useEntries, useHabitLogs, useHabits, usePlans } from '../hooks';
 import { planStart, targetText } from '../plans';
 import { dayEnd, dayStart, fmtHours, todayKey } from '../time';
 
-export type HomeTarget = 'today' | 'day' | 'stats' | 'manage' | 'settings';
+export type HomeTarget = 'today' | 'day' | 'stats' | 'ledger' | 'assets' | 'stocks';
 
 const WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六'];
 
@@ -41,8 +41,10 @@ export function HomeView({ onOpen }: { onOpen: (t: HomeTarget) => void }) {
   const tiles: { id: HomeTarget; icon: ReactNode; title: string; desc: string }[] = [
     { id: 'today', icon: <IconToday />, title: '今日安排', desc: '行程打勾、習慣' },
     { id: 'day', icon: <IconClock />, title: '時間軸', desc: '記錄時間花在哪' },
-    { id: 'stats', icon: <IconChart />, title: '統計', desc: '每日、每週時數' },
-    { id: 'manage', icon: <IconList />, title: '活動', desc: '活動與分類' },
+    { id: 'ledger', icon: <IconWallet />, title: '記帳', desc: '支出、訂閱、禮券' },
+    { id: 'assets', icon: <IconAsset />, title: '資產', desc: '帳戶餘額、薪資' },
+    { id: 'stocks', icon: <IconStock />, title: '股票', desc: '進出紀錄、交易習慣' },
+    { id: 'stats', icon: <IconChart />, title: '時間統計', desc: '每日、每週時數' },
   ];
 
   return (

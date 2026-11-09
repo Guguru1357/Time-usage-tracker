@@ -13,16 +13,18 @@ import {
   sendTestNotification,
 } from '../notifications';
 import { updateSettings } from '../repo';
+import { importPwaBackup, isPwaBackup } from '../wallet/importPwa';
 import { UpdateSheet } from '../components/UpdateSheet';
 import { CURRENT_BUILD, checkForUpdate, type UpdateInfo } from '../updater';
 
-export function SettingsView() {
+export function SettingsView({ onManage }: { onManage: () => void }) {
   const settings = useSettings();
   const [perm, setPerm] = useState<string>('…');
   const [exact, setExact] = useState<boolean | null>(null);
   const [scheduled, setScheduled] = useState<number | null>(null);
   const [msg, setMsg] = useState('');
   const fileInput = useRef<HTMLInputElement>(null);
+  const pwaInput = useRef<HTMLInputElement>(null);
   const [checking, setChecking] = useState(false);
   const [updateResult, setUpdateResult] = useState('');
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
@@ -65,6 +67,18 @@ export function SettingsView() {
       await restoreBackup(backup);
       setScheduled(await rescheduleReminders());
       setMsg('匯入完成');
+    } catch (e) {
+      setMsg(`匯入失敗：${(e as Error).message}`);
+    }
+  }
+
+  async function onImportPwa(file: File) {
+    try {
+      const data: unknown = JSON.parse(await file.text());
+      if (!isPwaBackup(data)) throw new Error('這不是訂閱追蹤器（網頁版）的備份檔');
+      if (!confirm('會用備份裡的訂閱、記帳、禮券取代 App 裡目前的這三項資料（時間紀錄、安排、習慣、資產、股票不受影響）。確定嗎？')) return;
+      const r = await importPwaBackup(data);
+      setMsg(`匯入完成：訂閱 ${r.subs} 筆、支出 ${r.expenses} 筆、禮券 ${r.giftCards} 張`);
     } catch (e) {
       setMsg(`匯入失敗：${(e as Error).message}`);
     }
@@ -127,6 +141,61 @@ export function SettingsView() {
             </button>
           ))}
         </div>
+      </section>
+
+      <section className="card">
+        <h3>錢包提醒</h3>
+        <div className="status-row">
+          <span>每月輸入薪資</span>
+          <select
+            className="plain-select"
+            value={settings.salaryDay ?? 7}
+            onChange={async (e) => {
+              await updateSettings({ salaryDay: Number(e.target.value) });
+              setScheduled(await rescheduleReminders());
+            }}
+          >
+            <option value={0}>關閉</option>
+            {Array.from({ length: 28 }, (_, i) => (
+              <option key={i} value={i + 1}>
+                每月 {i + 1} 號 20:00
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="reminder-row">
+          <label className="switch">
+            <input
+              type="checkbox"
+              checked={(settings.tradeTime ?? '14:00') !== ''}
+              onChange={async (e) => {
+                await updateSettings({ tradeTime: e.target.checked ? '14:00' : '' });
+                setScheduled(await rescheduleReminders());
+              }}
+            />
+            <span />
+          </label>
+          <div className="reminder-text">
+            <b>記錄股票進出</b>
+            <small className="muted">週一到週五；通知上可按「今天沒交易」或「今天休市」</small>
+          </div>
+          {(settings.tradeTime ?? '14:00') !== '' && (
+            <TimeField
+              value={settings.tradeTime ?? '14:00'}
+              onChange={async (v) => {
+                await updateSettings({ tradeTime: v });
+                setScheduled(await rescheduleReminders());
+              }}
+            />
+          )}
+        </div>
+      </section>
+
+      <section className="card">
+        <h3>活動與分類</h3>
+        <button className="btn block" onClick={onManage}>
+          管理活動與分類
+        </button>
       </section>
 
       <section className="card">
@@ -219,6 +288,20 @@ export function SettingsView() {
         <button className="btn ghost block" onClick={() => fileInput.current?.click()}>
           從 JSON 還原…
         </button>
+        <button className="btn ghost block" onClick={() => pwaInput.current?.click()}>
+          從訂閱追蹤器（網頁版）匯入訂閱、記帳、禮券…
+        </button>
+        <input
+          ref={pwaInput}
+          type="file"
+          accept="application/json,.json"
+          hidden
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            e.target.value = '';
+            if (f) void onImportPwa(f);
+          }}
+        />
         <input
           ref={fileInput}
           type="file"

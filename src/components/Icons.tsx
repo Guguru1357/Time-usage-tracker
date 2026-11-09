@@ -65,6 +65,26 @@ export const IconHome = () => (
   </Svg>
 );
 
+export const IconWallet = () => (
+  <Svg>
+    <rect x="3.5" y="6.5" width="17" height="12" rx="2.5" />
+    <path d="M3.5 10h17M15.5 14.5h2" />
+  </Svg>
+);
+
+export const IconAsset = () => (
+  <Svg>
+    <path d="M4 19.5h16M6 16.5v-5M10 16.5v-8M14 16.5v-6M18 16.5v-10" />
+  </Svg>
+);
+
+export const IconStock = () => (
+  <Svg>
+    <path d="M4 17l5-5 3.5 3.5L20 8" />
+    <path d="M15 8h5v5" />
+  </Svg>
+);
+
 export const IconToday = () => (
   <Svg>
     <rect x="4.5" y="4.5" width="15" height="15" rx="3" />

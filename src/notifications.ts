@@ -3,7 +3,8 @@ import { LocalNotifications } from '@capacitor/local-notifications';
 import { db, type Plan } from './db';
 import { planStart, targetText } from './plans';
 import { entriesOverlapping, getSettings } from './repo';
-import { MIN, addDays, findGaps, periodsForDay, todayKey } from './time';
+import { MIN, addDays, dayStart, findGaps, parseHM, periodsForDay, todayKey } from './time';
+import { reportedTradeDays } from './wallet/stocks';
 
 export const isNative = Capacitor.isNativePlatform();
 
@@ -12,6 +13,13 @@ const PLAN_CHANNEL_ID = 'plan';
 const PLAN_ACTION_TYPE = 'plan';
 /** 安排通知的 id 區段，與回顧提醒（yyyymmdd*10）不重疊 */
 const PLAN_ID_BASE = 1_000_000_000;
+const MONEY_CHANNEL_ID = 'money';
+const TRADE_ACTION_TYPE = 'trade';
+/** 股票回報：800,000,000 + yyyymmdd；薪資：900,000,000 + yyyymm */
+const TRADE_ID_BASE = 800_000_000;
+const SALARY_ID_BASE = 900_000_000;
+const TRADE_DAYS_AHEAD = 14;
+const SALARY_TIME = '20:00';
 /** 一次排好未來幾天的提醒；每次開 App 會再往後補 */
 const DAYS_AHEAD = 30;
 const TEST_ID = 1;
@@ -19,6 +27,13 @@ const TEST_ID = 1;
 export interface ReviewTarget {
   date: string;
   reminderId: string;
+}
+
+export interface WalletTarget {
+  wallet: 'stocks' | 'assets';
+  date: string;
+  /** 從股票通知上的按鈕進來 */
+  action?: 'noTrade' | 'closed';
 }
 
 export interface PlanTarget {
@@ -33,6 +48,36 @@ export function planNotificationId(planId: string): number {
   let h = 0;
   for (const ch of planId) h = (Math.imul(h, 31) + ch.charCodeAt(0)) | 0;
   return PLAN_ID_BASE + (Math.abs(h) % 900_000_000);
+}
+
+/** 開盤日（週一到週五）要提醒記錄股票進出的時間點；已回報或休市的日子跳過 */
+export function tradeReminderTimes(today: string, time: string, reported: Set<string>, now: number, days = TRADE_DAYS_AHEAD): { date: string; at: number }[] {
+  if (!time) return [];
+  const out = [];
+  for (let i = 0; i < days; i++) {
+    const date = addDays(today, i);
+    const wd = new Date(dayStart(date)).getDay();
+    const at = dayStart(date) + parseHM(time) * MIN;
+    if (wd === 0 || wd === 6 || reported.has(date) || at <= now) continue;
+    out.push({ date, at });
+  }
+  return out;
+}
+
+/** 每月薪資提醒：這個月與下個月，該月已經記過薪資就不提醒 */
+export function salaryReminderTimes(today: string, day: number, salaryMonths: Set<string>, now: number): { month: string; at: number }[] {
+  if (!day) return [];
+  const [y, m] = today.split('-').map(Number);
+  const out = [];
+  for (const k of [0, 1]) {
+    const first = new Date(y, m - 1 + k, 1);
+    const last = new Date(first.getFullYear(), first.getMonth() + 1, 0).getDate();
+    const date = new Date(first.getFullYear(), first.getMonth(), Math.min(day, last));
+    const month = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+    const at = date.getTime() + parseHM(SALARY_TIME) * MIN;
+    if (at > now && !salaryMonths.has(month)) out.push({ month, at });
+  }
+  return out;
 }
 
 /** 需要排通知的安排：未完成、有開提醒、提醒時間還沒到 */
@@ -66,8 +111,25 @@ export async function ensureChannel(): Promise<void> {
     visibility: 1,
     vibration: true,
   });
+  await LocalNotifications.createChannel({
+    id: MONEY_CHANNEL_ID,
+    name: '錢包提醒',
+    description: '每月輸入薪資、開盤日記錄股票進出',
+    importance: 4,
+    visibility: 1,
+    vibration: true,
+  });
   await LocalNotifications.registerActionTypes({
-    types: [{ id: PLAN_ACTION_TYPE, actions: [{ id: 'done', title: '完成' }] }],
+    types: [
+      { id: PLAN_ACTION_TYPE, actions: [{ id: 'done', title: '完成' }] },
+      {
+        id: TRADE_ACTION_TYPE,
+        actions: [
+          { id: 'noTrade', title: '今天沒交易' },
+          { id: 'closed', title: '今天休市' },
+        ],
+      },
+    ],
   });
 }
 
@@ -139,6 +201,39 @@ async function doReschedule(now: number): Promise<number> {
   }
 
   const today = todayKey();
+
+  // 股票進出回報
+  const reported = await reportedTradeDays();
+  for (const { date, at } of tradeReminderTimes(today, settings.tradeTime ?? '14:00', reported, now)) {
+    const target: WalletTarget = { wallet: 'stocks', date };
+    toSchedule.push({
+      id: TRADE_ID_BASE + Number(date.replaceAll('-', '')),
+      title: '記錄今天的股票進出',
+      body: '有交易就記下來（含當時心情）；沒有交易按「今天沒交易」',
+      channelId: MONEY_CHANNEL_ID,
+      actionTypeId: TRADE_ACTION_TYPE,
+      schedule: { at: new Date(at), allowWhileIdle: true },
+      extra: target,
+      autoCancel: true,
+    });
+  }
+
+  // 每月薪資
+  const incomes = await db.incomes.toArray();
+  const salaryMonths = new Set(incomes.filter((i) => i.kind === 'salary').map((i) => i.date.slice(0, 7)));
+  for (const { month, at } of salaryReminderTimes(today, settings.salaryDay ?? 7, salaryMonths, now)) {
+    const target: WalletTarget = { wallet: 'assets', date: toDateKeyMs(at) };
+    toSchedule.push({
+      id: SALARY_ID_BASE + Number(month.replace('-', '')),
+      title: '今天發薪日，記一下薪資收入',
+      body: `${Number(month.slice(5))} 月薪資還沒記錄，順便更新各帳戶餘額`,
+      channelId: MONEY_CHANNEL_ID,
+      schedule: { at: new Date(at), allowWhileIdle: true },
+      extra: target,
+      autoCancel: true,
+    });
+  }
+
   for (let d = 0; d < DAYS_AHEAD; d++) {
     const date = addDays(today, d);
     const periods = periodsForDay(date, settings.reminders);
@@ -191,11 +286,23 @@ export async function sendTestNotification(): Promise<void> {
   });
 }
 
-export function onNotificationTap(handlers: { review: (t: ReviewTarget) => void; plan: (t: PlanTarget) => void }): void {
+function toDateKeyMs(ms: number): string {
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+export function onNotificationTap(handlers: {
+  review: (t: ReviewTarget) => void;
+  plan: (t: PlanTarget) => void;
+  wallet: (t: WalletTarget) => void;
+}): void {
   if (!isNative) return;
   void LocalNotifications.addListener('localNotificationActionPerformed', (action) => {
-    const extra = action.notification.extra as Partial<ReviewTarget & PlanTarget> | undefined;
-    if (extra?.date && extra.planId) handlers.plan({ date: extra.date, planId: extra.planId, done: action.actionId === 'done' });
+    const extra = action.notification.extra as Partial<ReviewTarget & PlanTarget & WalletTarget> | undefined;
+    if (extra?.wallet && extra.date) {
+      const a = action.actionId;
+      handlers.wallet({ wallet: extra.wallet, date: extra.date, action: a === 'noTrade' || a === 'closed' ? a : undefined });
+    } else if (extra?.date && extra.planId) handlers.plan({ date: extra.date, planId: extra.planId, done: action.actionId === 'done' });
     else if (extra?.date && extra.reminderId) handlers.review({ date: extra.date, reminderId: extra.reminderId });
   });
 }

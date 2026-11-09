@@ -2,6 +2,10 @@ import { Capacitor } from '@capacitor/core';
 import { Directory, Encoding, Filesystem } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
 import { db, type Activity, type Category, type Entry, type Habit, type HabitLog, type Plan, type Settings, type StudyDetails } from './db';
+
+/** 錢包的資料表；備份與還原時一起處理 */
+const WALLET_TABLES = ['expenseCats', 'expenses', 'quickItems', 'subscriptions', 'giftCards', 'accounts', 'balances', 'incomes', 'trades'] as const;
+type WalletTable = (typeof WALLET_TABLES)[number];
 import { DEFAULT_SETTINGS } from './defaults';
 import { MIN, fmtHM, toDateKey } from './time';
 
@@ -17,6 +21,7 @@ export interface BackupFile {
   plans?: Plan[];
   habits?: Habit[];
   habitLogs?: HabitLog[];
+  wallet?: Partial<Record<WalletTable, unknown[]>>;
 }
 
 export async function buildBackup(): Promise<BackupFile> {
@@ -29,7 +34,9 @@ export async function buildBackup(): Promise<BackupFile> {
     db.habits.toArray(),
     db.habitLogs.toArray(),
   ]);
-  return { app: 'time-ledger', version: 1, exportedAt: new Date().toISOString(), categories, activities, entries, settings, plans, habits, habitLogs };
+  const wallet: Partial<Record<WalletTable, unknown[]>> = {};
+  for (const t of WALLET_TABLES) wallet[t] = await db.table(t).toArray();
+  return { app: 'time-ledger', version: 1, exportedAt: new Date().toISOString(), categories, activities, entries, settings, plans, habits, habitLogs, wallet };
 }
 
 function csvCell(v: string | number): string {
@@ -120,7 +127,7 @@ export function parseBackup(text: string): BackupFile {
  * 舊版備份沒有安排／習慣時，保留手機上現有的安排與習慣。
  */
 export async function restoreBackup(b: BackupFile): Promise<void> {
-  const tables = [db.categories, db.activities, db.entries, db.settings, db.plans, db.habits, db.habitLogs];
+  const tables = [db.categories, db.activities, db.entries, db.settings, db.plans, db.habits, db.habitLogs, ...WALLET_TABLES.map((t) => db.table(t))];
   await db.transaction('rw', tables, async () => {
     await Promise.all([db.categories.clear(), db.activities.clear(), db.entries.clear(), db.settings.clear()]);
     await db.categories.bulkAdd(b.categories ?? []);
@@ -130,5 +137,9 @@ export async function restoreBackup(b: BackupFile): Promise<void> {
     if (b.plans) await db.plans.clear().then(() => db.plans.bulkAdd(b.plans!));
     if (b.habits) await db.habits.clear().then(() => db.habits.bulkAdd(b.habits!));
     if (b.habitLogs) await db.habitLogs.clear().then(() => db.habitLogs.bulkAdd(b.habitLogs!));
+    for (const t of WALLET_TABLES) {
+      const rows = b.wallet?.[t];
+      if (rows) await db.table(t).clear().then(() => db.table(t).bulkAdd(rows));
+    }
   });
 }
