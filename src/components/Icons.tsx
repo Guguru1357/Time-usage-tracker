@@ -59,6 +59,19 @@ export const IconPlus = ({ size = 22 }: { size?: number }) => (
   </Svg>
 );
 
+export const IconHome = () => (
+  <Svg>
+    <path d="M4.5 10.5 12 4.5l7.5 6V19a.5.5 0 0 1-.5.5h-4.5v-5h-5v5H5a.5.5 0 0 1-.5-.5z" />
+  </Svg>
+);
+
+export const IconToday = () => (
+  <Svg>
+    <rect x="4.5" y="4.5" width="15" height="15" rx="3" />
+    <path d="m8.5 12 2.5 2.5 4.5-5" />
+  </Svg>
+);
+
 export const IconChart = () => (
   <Svg>
     <path d="M5 19V11M12 19V5M19 19v-6" />

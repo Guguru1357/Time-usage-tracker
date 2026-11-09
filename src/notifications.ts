@@ -1,11 +1,17 @@
 import { Capacitor } from '@capacitor/core';
 import { LocalNotifications } from '@capacitor/local-notifications';
+import { db, type Plan } from './db';
+import { planStart, targetText } from './plans';
 import { entriesOverlapping, getSettings } from './repo';
-import { addDays, findGaps, periodsForDay, todayKey } from './time';
+import { MIN, addDays, findGaps, periodsForDay, todayKey } from './time';
 
 export const isNative = Capacitor.isNativePlatform();
 
 const CHANNEL_ID = 'review';
+const PLAN_CHANNEL_ID = 'plan';
+const PLAN_ACTION_TYPE = 'plan';
+/** 安排通知的 id 區段，與回顧提醒（yyyymmdd*10）不重疊 */
+const PLAN_ID_BASE = 1_000_000_000;
 /** 一次排好未來幾天的提醒；每次開 App 會再往後補 */
 const DAYS_AHEAD = 30;
 const TEST_ID = 1;
@@ -13,6 +19,28 @@ const TEST_ID = 1;
 export interface ReviewTarget {
   date: string;
   reminderId: string;
+}
+
+export interface PlanTarget {
+  date: string;
+  planId: string;
+  /** 從通知上的「完成」按鈕進來 */
+  done: boolean;
+}
+
+/** 由安排 id 算出穩定的通知 id */
+export function planNotificationId(planId: string): number {
+  let h = 0;
+  for (const ch of planId) h = (Math.imul(h, 31) + ch.charCodeAt(0)) | 0;
+  return PLAN_ID_BASE + (Math.abs(h) % 900_000_000);
+}
+
+/** 需要排通知的安排：未完成、有開提醒、提醒時間還沒到 */
+export function plansToNotify(plans: Plan[], leadMin: number, now: number): { plan: Plan; at: number }[] {
+  return plans
+    .filter((p) => p.remind && !p.doneAt)
+    .map((p) => ({ plan: p, at: planStart(p) - leadMin * MIN }))
+    .filter((x) => x.at > now);
 }
 
 /** 通知 id：yyyymmdd * 10 + 提醒序號，保證不同天、不同時段不重複 */
@@ -29,6 +57,17 @@ export async function ensureChannel(): Promise<void> {
     importance: 4,
     visibility: 1,
     vibration: true,
+  });
+  await LocalNotifications.createChannel({
+    id: PLAN_CHANNEL_ID,
+    name: '行程提醒',
+    description: '在你安排好的時間提醒你，可直接按「完成」',
+    importance: 4,
+    visibility: 1,
+    vibration: true,
+  });
+  await LocalNotifications.registerActionTypes({
+    types: [{ id: PLAN_ACTION_TYPE, actions: [{ id: 'done', title: '完成' }] }],
   });
 }
 
@@ -79,10 +118,26 @@ async function doReschedule(now: number): Promise<number> {
   }
 
   const settings = await getSettings();
-  const enabled = settings.reminders.filter((r) => r.enabled);
-  if (enabled.length === 0) return 0;
-
   const toSchedule = [];
+
+  // 安排的提醒
+  const lead = settings.planLead ?? 0;
+  const upcoming = await db.plans.where('date').between(todayKey(), addDays(todayKey(), DAYS_AHEAD), true, false).toArray();
+  for (const { plan, at } of plansToNotify(upcoming, lead, now)) {
+    const target: PlanTarget = { date: plan.date, planId: plan.id, done: false };
+    const detail = targetText(plan);
+    toSchedule.push({
+      id: planNotificationId(plan.id),
+      title: `${lead ? `${lead} 分鐘後` : '現在'}：${plan.time} ${plan.title}`,
+      body: detail || '做完按「完成」打勾',
+      channelId: PLAN_CHANNEL_ID,
+      actionTypeId: PLAN_ACTION_TYPE,
+      schedule: { at: new Date(at), allowWhileIdle: true },
+      extra: target,
+      autoCancel: true,
+    });
+  }
+
   const today = todayKey();
   for (let d = 0; d < DAYS_AHEAD; d++) {
     const date = addDays(today, d);
@@ -136,10 +191,11 @@ export async function sendTestNotification(): Promise<void> {
   });
 }
 
-export function onReviewNotificationTap(handler: (t: ReviewTarget) => void): void {
+export function onNotificationTap(handlers: { review: (t: ReviewTarget) => void; plan: (t: PlanTarget) => void }): void {
   if (!isNative) return;
   void LocalNotifications.addListener('localNotificationActionPerformed', (action) => {
-    const extra = action.notification.extra as Partial<ReviewTarget> | undefined;
-    if (extra?.date && extra.reminderId) handler({ date: extra.date, reminderId: extra.reminderId });
+    const extra = action.notification.extra as Partial<ReviewTarget & PlanTarget> | undefined;
+    if (extra?.date && extra.planId) handlers.plan({ date: extra.date, planId: extra.planId, done: action.actionId === 'done' });
+    else if (extra?.date && extra.reminderId) handlers.review({ date: extra.date, reminderId: extra.reminderId });
   });
 }

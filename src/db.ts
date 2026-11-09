@@ -23,6 +23,8 @@ export interface Activity {
   longDuration?: boolean;
   /** 已刪除的活動保留下來，舊紀錄才能顯示名稱 */
   archived?: boolean;
+  /** 重訓類：安排時可設定肌群與組數，完成時記錄動作、重量、次數 */
+  workout?: boolean;
 }
 
 /** 學習細節，欄位皆選填 */
@@ -71,6 +73,81 @@ export interface Reminder {
   enabled: boolean;
 }
 
+/** 安排的學習目標（閱讀可填頁數範圍） */
+export interface PlanStudy {
+  title?: string;
+  pageFrom?: number;
+  pageTo?: number;
+  /** 非頁數類的進度，例如章節、主題 */
+  progress?: string;
+}
+
+/** 重訓的一個動作 */
+export interface WorkoutSet {
+  exercise: string;
+  /** kg */
+  weight?: number;
+  reps?: number;
+  sets?: number;
+}
+
+export interface PlanResult {
+  study?: PlanStudy;
+  workout?: WorkoutSet[];
+  note?: string;
+}
+
+/** 預先安排的行程，到時間打勾確認 */
+export interface Plan {
+  id: string;
+  /** YYYY-MM-DD */
+  date: string;
+  /** HH:MM */
+  time: string;
+  /** 預計長度（分鐘），完成時用來記到時間軸 */
+  durationMin?: number;
+  /** 顯示名稱；有活動時預設為活動名稱 */
+  title: string;
+  activityId?: string;
+  /** 到時間發通知 */
+  remind: boolean;
+  /** 學習目標 */
+  study?: PlanStudy;
+  /** 重訓目標 */
+  muscles?: string[];
+  targetSets?: number;
+  note?: string;
+  /** 完成時間（epoch ms） */
+  doneAt?: number;
+  result?: PlanResult;
+  /** 完成時自動新增的時間軸紀錄，取消完成時一併刪除 */
+  entryId?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface Habit {
+  id: string;
+  name: string;
+  emoji: string;
+  /** 哪幾天要做（0=週日 … 6=週六） */
+  days: number[];
+  /** 每天目標次數，預設 1 */
+  target: number;
+  /** 連動的活動：當天時間軸有這個活動就算完成 */
+  activityId?: string;
+  order: number;
+  archived?: boolean;
+}
+
+/** 習慣的手動打勾紀錄；id = `${habitId}|${date}` */
+export interface HabitLog {
+  id: string;
+  habitId: string;
+  date: string;
+  count: number;
+}
+
 export type ThemeMode = 'light' | 'dark' | 'system';
 
 export interface Settings {
@@ -81,6 +158,8 @@ export interface Settings {
   autoUpdate?: boolean;
   /** 時間刻度（分鐘） */
   step: number;
+  /** 安排的提醒提前幾分鐘，未設定為準時 */
+  planLead?: number;
   reminders: Reminder[];
 }
 
@@ -95,6 +174,9 @@ export class TimeLedgerDB extends Dexie {
   entries!: EntityTable<Entry, 'id'>;
   settings!: EntityTable<Settings, 'id'>;
   kv!: EntityTable<KV, 'key'>;
+  plans!: EntityTable<Plan, 'id'>;
+  habits!: EntityTable<Habit, 'id'>;
+  habitLogs!: EntityTable<HabitLog, 'id'>;
 
   constructor(name = 'time-ledger') {
     super(name);
@@ -114,7 +196,40 @@ export class TimeLedgerDB extends Dexie {
           if (a.name === '睡覺') a.longDuration = true;
         }),
     );
+    // v3：安排、習慣；預設的「重訓」標為重訓類，並加入預設習慣
+    this.version(3)
+      .stores({ plans: 'id, date', habits: 'id, order', habitLogs: 'id, date, habitId' })
+      .upgrade(async (tx) => {
+        const acts = (await tx.table('activities').toArray()) as Activity[];
+        const workout = acts.find((a) => a.name === '重訓' && !a.archived);
+        if (workout) await tx.table('activities').update(workout.id, { workout: true });
+        if ((await tx.table('habits').count()) === 0) {
+          await tx.table('habits').bulkAdd(defaultHabits(acts));
+        }
+      });
   }
+}
+
+/** 預設習慣；依名稱連動到現有活動 */
+export function defaultHabits(activities: Activity[]): Habit[] {
+  const find = (name: string) => activities.find((a) => a.name === name && !a.archived)?.id;
+  const every = [0, 1, 2, 3, 4, 5, 6];
+  const list: [string, string, number[], string | undefined][] = [
+    ['重訓', '🏋️', [1, 3, 5], find('重訓')],
+    ['彈鋼琴', '🎹', every, find('彈鋼琴')],
+    ['讀日文', '🇯🇵', every, find('讀日文')],
+    ['保健食品', '💊', every, undefined],
+    ['家務', '🧹', every, undefined],
+  ];
+  return list.map(([name, emoji, days, activityId], i) => ({
+    id: `habit-${i + 1}`,
+    name,
+    emoji,
+    days,
+    target: 1,
+    order: i,
+    ...(activityId ? { activityId } : {}),
+  }));
 }
 
 export const db = new TimeLedgerDB();

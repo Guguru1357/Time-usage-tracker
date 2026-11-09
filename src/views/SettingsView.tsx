@@ -111,6 +111,25 @@ export function SettingsView() {
       </section>
 
       <section className="card">
+        <h3>行程提醒</h3>
+        <p className="muted small">「今日」裡的安排到時間會通知，通知上可以直接按「完成」。</p>
+        <div className="segmented">
+          {[0, 5, 10, 15].map((m) => (
+            <button
+              key={m}
+              className={(settings.planLead ?? 0) === m ? 'active' : ''}
+              onClick={async () => {
+                await updateSettings({ planLead: m });
+                setScheduled(await rescheduleReminders());
+              }}
+            >
+              {m === 0 ? '準時' : `提前 ${m} 分`}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <section className="card">
         <h3>提醒狀態</h3>
         {!isNative ? (
           <p className="muted">目前是瀏覽器預覽版，提醒只有在手機 App 上才會運作。</p>

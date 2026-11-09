@@ -1,4 +1,4 @@
-import { db, type Activity, type Category, type DetailType, type Settings, type TimeLedgerDB } from './db';
+import { db, defaultHabits, type Activity, type Category, type DetailType, type Settings, type TimeLedgerDB } from './db';
 
 export const DEFAULT_SETTINGS: Settings = {
   id: 'main',
@@ -53,15 +53,18 @@ export function defaultActivities(): Activity[] {
     order: i,
     ...(detailType ? { detailType } : {}),
     ...(name === '睡覺' ? { longDuration: true } : {}),
+    ...(name === '重訓' ? { workout: true } : {}),
   }));
 }
 
 /** 第一次開啟時寫入預設分類、活動與設定 */
 export async function ensureSeeded(database: TimeLedgerDB = db): Promise<void> {
-  await database.transaction('rw', [database.categories, database.activities, database.settings], async () => {
+  await database.transaction('rw', [database.categories, database.activities, database.settings, database.habits], async () => {
     if ((await database.settings.count()) > 0) return;
+    const activities = defaultActivities();
     await database.categories.bulkAdd(defaultCategories());
-    await database.activities.bulkAdd(defaultActivities());
+    await database.activities.bulkAdd(activities);
     await database.settings.add(structuredClone(DEFAULT_SETTINGS));
+    if ((await database.habits.count()) === 0) await database.habits.bulkAdd(defaultHabits(activities));
   });
 }

@@ -1,19 +1,23 @@
 import { App as CapApp } from '@capacitor/app';
 import { useEffect, useRef, useState } from 'react';
-import { IconChart, IconClock, IconList, IconSettings } from './components/Icons';
+import { IconChart, IconClock, IconHome, IconSettings, IconToday } from './components/Icons';
 import { useSettings } from './hooks';
-import { isNative, onReviewNotificationTap, rescheduleReminders } from './notifications';
+import { isNative, onNotificationTap, rescheduleReminders } from './notifications';
 import { applyTheme } from './theme';
 import { UpdateSheet } from './components/UpdateSheet';
 import { autoCheck, type UpdateInfo } from './updater';
 import { todayKey } from './time';
 import { DayView } from './views/DayView';
+import { HomeView } from './views/HomeView';
 import { ManageView } from './views/ManageView';
 import { ReviewView } from './views/ReviewView';
 import { SettingsView } from './views/SettingsView';
 import { StatsView } from './views/StatsView';
+import { TodayView, type PlanFocus } from './views/TodayView';
 
 type Route =
+  | { name: 'home' }
+  | { name: 'today'; date: string; focus?: PlanFocus }
   | { name: 'day'; date: string }
   | { name: 'review'; date: string; reminderId: string }
   | { name: 'stats' }
@@ -21,7 +25,7 @@ type Route =
   | { name: 'settings' };
 
 export function App() {
-  const [stack, setStack] = useState<Route[]>([{ name: 'day', date: todayKey() }]);
+  const [stack, setStack] = useState<Route[]>([{ name: 'home' }]);
   const route = stack[stack.length - 1];
   const theme = useSettings().theme;
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
@@ -33,18 +37,16 @@ export function App() {
 
   const push = (r: Route) => setStack((s) => [...s, r]);
   const back = () => setStack((s) => (s.length > 1 ? s.slice(0, -1) : s));
-  // 切到其他分頁時保留目前看的日期；點「時間軸」回到今天
-  const tab = (r: Route) =>
-    setStack((s) =>
-      r.name === 'day' ? [r] : [{ name: 'day', date: (s[0] as { date?: string }).date ?? todayKey() }, r],
-    );
+  // 分頁都疊在首頁上面，按返回鍵回到首頁
+  const tab = (r: Route) => setStack(r.name === 'home' ? [r] : [{ name: 'home' }, r]);
 
   useEffect(() => {
     void rescheduleReminders();
     const check = () => void autoCheck().then((u) => u && setUpdate(u));
     check();
-    onReviewNotificationTap((t) => {
-      setStack([{ name: 'day', date: t.date }, { name: 'review', date: t.date, reminderId: t.reminderId }]);
+    onNotificationTap({
+      review: (t) => setStack([{ name: 'home' }, { name: 'day', date: t.date }, { name: 'review', date: t.date, reminderId: t.reminderId }]),
+      plan: (t) => setStack([{ name: 'home' }, { name: 'today', date: t.date, focus: { planId: t.planId, done: t.done, nonce: Date.now() } }]),
     });
     if (!isNative) return;
     const subs = [
@@ -77,6 +79,18 @@ export function App() {
             </button>
           </div>
         )}
+        {route.name === 'home' && (
+          <HomeView
+            onOpen={(t) => (t === 'today' || t === 'day' ? tab({ name: t, date: todayKey() }) : tab({ name: t }))}
+          />
+        )}
+        {route.name === 'today' && (
+          <TodayView
+            dateKey={route.date}
+            focus={route.focus}
+            onDate={(d) => setStack((s) => [...s.slice(0, -1), { name: 'today', date: d }])}
+          />
+        )}
         {route.name === 'day' && (
           <DayView
             dateKey={route.date}
@@ -99,6 +113,14 @@ export function App() {
         />
       )}
       <nav className="tabbar">
+        <button className={route.name === 'home' ? 'active' : ''} onClick={() => tab({ name: 'home' })}>
+          <IconHome />
+          首頁
+        </button>
+        <button className={route.name === 'today' ? 'active' : ''} onClick={() => tab({ name: 'today', date: todayKey() })}>
+          <IconToday />
+          今日
+        </button>
         <button className={route.name === 'day' || route.name === 'review' ? 'active' : ''} onClick={() => tab({ name: 'day', date: todayKey() })}>
           <IconClock />
           時間軸
@@ -106,10 +128,6 @@ export function App() {
         <button className={route.name === 'stats' ? 'active' : ''} onClick={() => tab({ name: 'stats' })}>
           <IconChart />
           統計
-        </button>
-        <button className={route.name === 'manage' ? 'active' : ''} onClick={() => tab({ name: 'manage' })}>
-          <IconList />
-          活動
         </button>
         <button className={route.name === 'settings' ? 'active' : ''} onClick={() => tab({ name: 'settings' })}>
           <IconSettings />

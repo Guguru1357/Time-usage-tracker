@@ -1,7 +1,7 @@
 import { Capacitor } from '@capacitor/core';
 import { Directory, Encoding, Filesystem } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
-import { db, type Activity, type Category, type Entry, type Settings, type StudyDetails } from './db';
+import { db, type Activity, type Category, type Entry, type Habit, type HabitLog, type Plan, type Settings, type StudyDetails } from './db';
 import { DEFAULT_SETTINGS } from './defaults';
 import { MIN, fmtHM, toDateKey } from './time';
 
@@ -13,16 +13,23 @@ export interface BackupFile {
   activities: Activity[];
   entries: Entry[];
   settings: Settings[];
+  /** 以下為後來加入的資料；舊備份沒有這些欄位 */
+  plans?: Plan[];
+  habits?: Habit[];
+  habitLogs?: HabitLog[];
 }
 
 export async function buildBackup(): Promise<BackupFile> {
-  const [categories, activities, entries, settings] = await Promise.all([
+  const [categories, activities, entries, settings, plans, habits, habitLogs] = await Promise.all([
     db.categories.toArray(),
     db.activities.toArray(),
     db.entries.orderBy('start').toArray(),
     db.settings.toArray(),
+    db.plans.toArray(),
+    db.habits.toArray(),
+    db.habitLogs.toArray(),
   ]);
-  return { app: 'time-ledger', version: 1, exportedAt: new Date().toISOString(), categories, activities, entries, settings };
+  return { app: 'time-ledger', version: 1, exportedAt: new Date().toISOString(), categories, activities, entries, settings, plans, habits, habitLogs };
 }
 
 function csvCell(v: string | number): string {
@@ -108,13 +115,20 @@ export function parseBackup(text: string): BackupFile {
   return data as BackupFile;
 }
 
-/** 以備份完全取代目前資料 */
+/**
+ * 以備份完全取代目前資料。
+ * 舊版備份沒有安排／習慣時，保留手機上現有的安排與習慣。
+ */
 export async function restoreBackup(b: BackupFile): Promise<void> {
-  await db.transaction('rw', [db.categories, db.activities, db.entries, db.settings], async () => {
+  const tables = [db.categories, db.activities, db.entries, db.settings, db.plans, db.habits, db.habitLogs];
+  await db.transaction('rw', tables, async () => {
     await Promise.all([db.categories.clear(), db.activities.clear(), db.entries.clear(), db.settings.clear()]);
     await db.categories.bulkAdd(b.categories ?? []);
     await db.activities.bulkAdd(b.activities);
     await db.entries.bulkAdd(b.entries);
     await db.settings.bulkAdd(b.settings?.length ? b.settings : [structuredClone(DEFAULT_SETTINGS)]);
+    if (b.plans) await db.plans.clear().then(() => db.plans.bulkAdd(b.plans!));
+    if (b.habits) await db.habits.clear().then(() => db.habits.bulkAdd(b.habits!));
+    if (b.habitLogs) await db.habitLogs.clear().then(() => db.habitLogs.bulkAdd(b.habitLogs!));
   });
 }

@@ -1,7 +1,8 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useRef } from 'react';
-import { db, type Activity, type Category, type Entry, type Settings } from './db';
+import { db, type Activity, type Category, type Entry, type Habit, type HabitLog, type Plan, type Settings } from './db';
 import { DEFAULT_SETTINGS } from './defaults';
+import { plansForDate } from './plans';
 import { entriesOverlapping } from './repo';
 import type { Interval } from './time';
 
@@ -38,4 +39,20 @@ export function useEntries(range: Interval): Entry[] | undefined {
   const value = useLiveQuery(() => entriesOverlapping(range), [range.start, range.end]);
   if (value !== undefined) last.current = value;
   return value ?? last.current;
+}
+
+export function usePlans(date: string): Plan[] | undefined {
+  return useLiveQuery(() => plansForDate(date), [date]);
+}
+
+export function useHabits(): Habit[] | undefined {
+  return useLiveQuery(async () => (await db.habits.orderBy('order').toArray()).filter((h) => !h.archived));
+}
+
+/** 日期區間內的習慣打勾紀錄，key 為 HabitLog.id */
+export function useHabitLogs(from: string, to: string): Map<string, HabitLog> | undefined {
+  return useLiveQuery(async () => {
+    const list = await db.habitLogs.where('date').between(from, to, true, true).toArray();
+    return new Map(list.map((l) => [l.id, l]));
+  }, [from, to]);
 }

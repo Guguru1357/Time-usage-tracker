@@ -152,11 +152,12 @@ export function ActivityForm({
   const [categoryId, setCategoryId] = useState(initial.categoryId ?? categories[0]?.id ?? '');
   const [longDuration, setLongDuration] = useState(initial.longDuration ?? false);
   const [detailType, setDetailType] = useState<DetailType | undefined>(initial.detailType);
+  const [workout, setWorkout] = useState(initial.workout ?? false);
   const [error, setError] = useState('');
 
   async function submit() {
     if (!name.trim()) return setError('請輸入名稱');
-    const id = await saveActivity({ id: initial.id, name: name.trim(), color, categoryId, detailType, longDuration });
+    const id = await saveActivity({ id: initial.id, name: name.trim(), color, categoryId, detailType, longDuration, workout });
     onSaved?.(id);
     onClose();
   }
@@ -213,6 +214,13 @@ export function ActivityForm({
             <span>
               長時間活動
               <small className="muted">（像睡覺一樣，記錄時長度快捷鍵改為 5～10 小時）</small>
+            </span>
+          </label>
+          <label className="toggle-row">
+            <input type="checkbox" checked={workout} onChange={(e) => setWorkout(e.target.checked)} />
+            <span>
+              重訓紀錄
+              <small className="muted">（安排時可選肌群、組數；完成時記錄動作、重量、次數）</small>
             </span>
           </label>
           {error && <div className="error">{error}</div>}
