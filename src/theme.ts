@@ -4,8 +4,11 @@ import type { ThemeMode } from './db';
 const media = window.matchMedia('(prefers-color-scheme: dark)');
 let current: ThemeMode = 'light';
 
+/** 使用者眼睛容易累，深色模式先關閉：不論設定一律淺色 */
+const DARK_ENABLED = false;
+
 function apply() {
-  const dark = current === 'dark' || (current === 'system' && media.matches);
+  const dark = DARK_ENABLED && (current === 'dark' || (current === 'system' && media.matches));
   const root = document.documentElement;
   root.dataset.theme = dark ? 'dark' : 'light';
   root.style.colorScheme = dark ? 'dark' : 'light';

@@ -247,23 +247,6 @@ export function SettingsView({ onManage }: { onManage: () => void }) {
       </section>
 
       <section className="card">
-        <h3>外觀</h3>
-        <div className="segmented">
-          {(
-            [
-              ['light', '淺色'],
-              ['dark', '深色'],
-              ['system', '跟隨系統'],
-            ] as const
-          ).map(([v, label]) => (
-            <button key={v} className={(settings.theme ?? 'light') === v ? 'active' : ''} onClick={() => updateSettings({ theme: v })}>
-              {label}
-            </button>
-          ))}
-        </div>
-      </section>
-
-      <section className="card">
         <h3>時間刻度</h3>
         <div className="segmented">
           {[5, 10, 15, 30].map((s) => (
