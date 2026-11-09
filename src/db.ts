@@ -230,6 +230,8 @@ export interface Account {
   name: string;
   /** 郵局、銀行、現金、證券交割戶… */
   kind: 'bank' | 'post' | 'cash' | 'broker' | 'other';
+  /** 幣別代碼，例如 USD；未設定為台幣 */
+  currency?: string;
   order: number;
   archived?: boolean;
 }
@@ -287,8 +289,12 @@ export interface Settings {
   step: number;
   /** 安排的提醒提前幾分鐘，未設定為準時 */
   planLead?: number;
-  /** USD → TWD 匯率（訂閱換算用） */
+  /** USD → TWD 匯率（訂閱與外幣帳戶共用） */
   usdRate?: number;
+  /** 其他外幣 → TWD 匯率（1 單位外幣 = 多少台幣），由使用者手動輸入 */
+  fxRates?: Record<string, number>;
+  /** 匯率最後更新日期 */
+  fxUpdated?: string;
   /** 每月幾號提醒輸入薪資；0 或未設定為關閉，預設 7 */
   salaryDay?: number;
   /** 開盤日提醒記錄股票進出的時間；空字串為關閉，預設 14:00 */

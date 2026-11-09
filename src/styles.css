@@ -2222,3 +2222,20 @@ h3 {
   color: var(--ok);
   font-weight: 600;
 }
+.rate-input {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 15px;
+  color: var(--text-2);
+}
+.rate-input input {
+  width: 92px;
+  height: 42px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  padding: 0 8px;
+  font-size: 17px;
+  text-align: center;
+}

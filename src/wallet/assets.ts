@@ -1,5 +1,49 @@
-import { db, uid, type Account, type Balance, type Income } from '../db';
-import { round2 } from './money';
+import { db, uid, type Account, type Balance, type Income, type Settings } from '../db';
+import { DEFAULT_USD_RATE, fmtTWD, round2 } from './money';
+
+/** 常用外幣；符號用於顯示金額 */
+export const CURRENCIES: { code: string; name: string; symbol: string; decimals: number }[] = [
+  { code: 'TWD', name: '台幣', symbol: 'NT$', decimals: 0 },
+  { code: 'USD', name: '美元', symbol: 'US$', decimals: 2 },
+  { code: 'JPY', name: '日圓', symbol: 'JP¥', decimals: 0 },
+  { code: 'EUR', name: '歐元', symbol: '€', decimals: 2 },
+  { code: 'CNY', name: '人民幣', symbol: 'CN¥', decimals: 2 },
+  { code: 'HKD', name: '港幣', symbol: 'HK$', decimals: 2 },
+  { code: 'GBP', name: '英鎊', symbol: '£', decimals: 2 },
+  { code: 'AUD', name: '澳幣', symbol: 'A$', decimals: 2 },
+  { code: 'CAD', name: '加幣', symbol: 'C$', decimals: 2 },
+  { code: 'SGD', name: '新加坡幣', symbol: 'S$', decimals: 2 },
+  { code: 'KRW', name: '韓元', symbol: '₩', decimals: 0 },
+];
+
+export function currencyOf(a: Pick<Account, 'currency'>): string {
+  return a.currency || 'TWD';
+}
+
+export function currencyInfo(code: string) {
+  return CURRENCIES.find((c) => c.code === code) ?? { code, name: code, symbol: `${code} `, decimals: 2 };
+}
+
+/** 以該幣別顯示金額，例如 US$1,200.50、JP¥30,000 */
+export function fmtMoney(amount: number, code: string): string {
+  if (code === 'TWD') return fmtTWD(amount);
+  const c = currencyInfo(code);
+  return c.symbol + amount.toLocaleString('zh-TW', { maximumFractionDigits: c.decimals, minimumFractionDigits: 0 });
+}
+
+/** 1 單位外幣 = 多少台幣；沒設定時回傳 undefined（美元預設沿用訂閱的匯率） */
+export function rateOf(code: string, settings: Pick<Settings, 'usdRate' | 'fxRates'>): number | undefined {
+  if (code === 'TWD') return 1;
+  if (code === 'USD') return settings.usdRate ?? DEFAULT_USD_RATE;
+  const r = settings.fxRates?.[code];
+  return r && r > 0 ? r : undefined;
+}
+
+export async function setRate(code: string, rate: number, date: string): Promise<void> {
+  const cur = (await db.settings.get('main'))!;
+  if (code === 'USD') await db.settings.put({ ...cur, usdRate: rate, fxUpdated: date });
+  else await db.settings.put({ ...cur, fxRates: { ...cur.fxRates, [code]: rate }, fxUpdated: date });
+}
 
 export const ACCOUNT_KINDS: Record<Account['kind'], string> = {
   post: '郵局',
@@ -30,11 +74,26 @@ export function balancesAt(balances: Balance[], date?: string): Map<string, Bala
   return out;
 }
 
-export function totalAt(accounts: Account[], balances: Balance[], date?: string): number {
-  const live = new Set(accounts.filter((a) => !a.archived).map((a) => a.id));
+export interface AssetTotal {
+  /** 換算成台幣的總額 */
+  twd: number;
+  /** 還沒設定匯率、沒算進總額的幣別 */
+  missing: string[];
+}
+
+/** 所有帳戶換算台幣的總額（使用目前匯率） */
+export function totalAt(accounts: Account[], balances: Balance[], rates: (code: string) => number | undefined, date?: string): AssetTotal {
+  const byId = new Map(accounts.filter((a) => !a.archived).map((a) => [a.id, a]));
   let sum = 0;
-  for (const [id, b] of balancesAt(balances, date)) if (live.has(id)) sum += b.amount;
-  return round2(sum);
+  const missing = new Set<string>();
+  for (const [id, b] of balancesAt(balances, date)) {
+    const a = byId.get(id);
+    if (!a) continue;
+    const r = rates(currencyOf(a));
+    if (r === undefined) missing.add(currencyOf(a));
+    else sum += b.amount * r;
+  }
+  return { twd: round2(sum), missing: [...missing] };
 }
 
 export async function saveAccount(a: Omit<Account, 'id' | 'order'> & { id?: string }): Promise<string> {

@@ -5,7 +5,7 @@ import { db, type Subscription, type Trade } from '../src/db';
 import { ensureSeeded } from '../src/defaults';
 import { salaryReminderTimes, tradeReminderTimes } from '../src/notifications';
 import { HOUR, MIN, dayStart } from '../src/time';
-import { addIncome, saveAccount, setBalance, totalAt } from '../src/wallet/assets';
+import { addIncome, fmtMoney, rateOf, saveAccount, setBalance, totalAt } from '../src/wallet/assets';
 import { importPwaBackup } from '../src/wallet/importPwa';
 import { addGiftLog, giftCount, monthlyTWD, nextCharge, saveExpense } from '../src/wallet/money';
 import { analyzePositions, tradeReport, weeklyCounts } from '../src/wallet/stocks';
@@ -93,8 +93,23 @@ describe('assets', () => {
     await setBalance(bank, 20_000, '2026-10-31');
     await addIncome({ date: '2026-11-07', amount: 40_000, kind: 'salary', accountId: bank }, true);
     const [accounts, balances] = [await db.accounts.toArray(), await db.balances.toArray()];
-    expect(totalAt(accounts, balances, '2026-10-31')).toBe(70_000);
-    expect(totalAt(accounts, balances)).toBe(110_000);
+    const twdOnly = (c: string) => (c === 'TWD' ? 1 : undefined);
+    expect(totalAt(accounts, balances, twdOnly, '2026-10-31').twd).toBe(70_000);
+    expect(totalAt(accounts, balances, twdOnly).twd).toBe(110_000);
+  });
+
+  it('converts foreign currency accounts and reports currencies without a rate', async () => {
+    const usd = await saveAccount({ name: '國泰 美元', kind: 'bank', currency: 'USD' });
+    const jpy = await saveAccount({ name: '日圓帳戶', kind: 'bank', currency: 'JPY' });
+    await setBalance(usd, 1000, '2026-11-01');
+    await setBalance(jpy, 50_000, '2026-11-01');
+    const [accounts, balances] = [await db.accounts.toArray(), await db.balances.toArray()];
+    const settings = { usdRate: 32.5, fxRates: {} as Record<string, number> };
+    expect(totalAt(accounts, balances, (c) => rateOf(c, settings))).toEqual({ twd: 32_500, missing: ['JPY'] });
+    settings.fxRates.JPY = 0.21;
+    expect(totalAt(accounts, balances, (c) => rateOf(c, settings))).toEqual({ twd: 43_000, missing: [] });
+    expect(fmtMoney(1234.5, 'USD')).toBe('US$1,234.5');
+    expect(fmtMoney(50000, 'JPY')).toBe('JP¥50,000');
   });
 });
 

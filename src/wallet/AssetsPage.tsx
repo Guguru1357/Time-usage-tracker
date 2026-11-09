@@ -3,7 +3,23 @@ import { useEffect, useState } from 'react';
 import { db, type Account, type Income } from '../db';
 import { rescheduleReminders } from '../notifications';
 import { fmtDateLabel, todayKey } from '../time';
-import { ACCOUNT_KINDS, INCOME_KINDS, addIncome, balancesAt, salaryInMonth, saveAccount, setBalance, totalAt } from './assets';
+import { useSettings } from '../hooks';
+import {
+  ACCOUNT_KINDS,
+  CURRENCIES,
+  INCOME_KINDS,
+  addIncome,
+  balancesAt,
+  currencyInfo,
+  currencyOf,
+  fmtMoney,
+  rateOf,
+  salaryInMonth,
+  saveAccount,
+  setBalance,
+  setRate,
+  totalAt,
+} from './assets';
 import { fmtTWD, monthRange, shiftMonth } from './money';
 import { BarChart, HBarList, Sheet, numOrUndef, useToast } from './ui';
 
@@ -15,6 +31,8 @@ export function AssetsPage({ openIncome }: { openIncome?: number }) {
   const [balanceOf, setBalanceOf] = useState<Account | null>(null);
   const [income, setIncome] = useState(false);
   const [, say, toast] = useToast();
+  const settings = useSettings();
+  const rates = (code: string) => rateOf(code, settings);
 
   // 從薪資通知進來時直接打開輸入畫面
   useEffect(() => {
@@ -22,17 +40,25 @@ export function AssetsPage({ openIncome }: { openIncome?: number }) {
   }, [openIncome]);
 
   const today = todayKey();
-  const month = today.slice(0, 7);
-  const total = totalAt(accounts, balances);
-  const lastMonthEnd = monthRange(shiftMonth(month, -1)).to;
-  const prevTotal = totalAt(accounts, balances, lastMonthEnd);
   const current = balancesAt(balances);
+  const month = today.slice(0, 7);
+  const totals = totalAt(accounts, balances, rates);
+  const total = totals.twd;
+  const lastMonthEnd = monthRange(shiftMonth(month, -1)).to;
+  const prevTotal = totalAt(accounts, balances, rates, lastMonthEnd).twd;
+  // 用到的外幣（台幣以外）
+  const foreign = [...new Set(accounts.map(currencyOf))].filter((c) => c !== 'TWD');
+  const twdOf = (a: Account) => {
+    const b = current.get(a.id);
+    const r = rates(currencyOf(a));
+    return b && r !== undefined ? b.amount * r : 0;
+  };
   const salary = salaryInMonth(incomes, month);
 
   const trend = Array.from({ length: 12 }, (_, i) => {
     const m = shiftMonth(month, i - 11);
     const end = m === month ? today : monthRange(m).to;
-    return { label: `${Number(m.slice(0, 4))}/${Number(m.slice(5))}`, short: `${Number(m.slice(5))}`, value: totalAt(accounts, balances, end) };
+    return { label: `${Number(m.slice(0, 4))}/${Number(m.slice(5))}`, short: `${Number(m.slice(5))}`, value: totalAt(accounts, balances, rates, end).twd };
   });
 
   return (
@@ -45,6 +71,10 @@ export function AssetsPage({ openIncome }: { openIncome?: number }) {
             比上月底 {total >= prevTotal ? '+' : '−'}
             {fmtTWD(Math.abs(total - prevTotal))}
           </small>
+        )}
+        {foreign.length > 0 && <small className="muted">外幣依目前匯率換算成台幣</small>}
+        {totals.missing.length > 0 && (
+          <div className="warn">還沒設定 {totals.missing.map((c) => currencyInfo(c).name).join('、')} 的匯率，這些帳戶沒有算進總資產</div>
         )}
       </div>
 
@@ -70,16 +100,22 @@ export function AssetsPage({ openIncome }: { openIncome?: number }) {
         <div className="money-list">
           {accounts.map((a) => {
             const b = current.get(a.id);
+            const cur = currencyOf(a);
+            const r = rates(cur);
             return (
               <button key={a.id} className="money-row" onClick={() => setBalanceOf(a)}>
                 <span className="money-main">
                   <span className="money-title">{a.name}</span>
                   <span className="money-sub">
                     {ACCOUNT_KINDS[a.kind]}
+                    {cur !== 'TWD' ? ` · ${currencyInfo(cur).name}` : ''}
                     {b ? ` · ${fmtDateLabel(b.date)} 更新` : ' · 還沒輸入餘額'}
                   </span>
                 </span>
-                <span className="money-amt">{b ? fmtTWD(b.amount) : '—'}</span>
+                <span className="money-amt">
+                  {b ? fmtMoney(b.amount, cur) : '—'}
+                  {b && cur !== 'TWD' && <small>{r !== undefined ? `≈ ${fmtTWD(b.amount * r)}` : '未設匯率'}</small>}
+                </span>
               </button>
             );
           })}
@@ -90,9 +126,47 @@ export function AssetsPage({ openIncome }: { openIncome?: number }) {
         <>
           <h3>資產分布</h3>
           <HBarList
-            rows={accounts.map((a) => ({ key: a.id, label: a.name, value: current.get(a.id)?.amount ?? 0, sub: `${Math.round(((current.get(a.id)?.amount ?? 0) / total) * 100)}%` }))}
+            rows={accounts.map((a) => ({ key: a.id, label: a.name, value: twdOf(a), sub: `${Math.round((twdOf(a) / total) * 100)}%` }))}
             format={fmtTWD}
           />
+        </>
+      )}
+
+      {foreign.length > 0 && (
+        <>
+          <h3>匯率（1 外幣 = 多少台幣）</h3>
+          <div className="money-list">
+            {foreign.map((c) => (
+              <div key={c} className="money-row static rate-row">
+                <span className="money-main">
+                  <span className="money-title">
+                    1 {currencyInfo(c).name}（{c}）
+                  </span>
+                </span>
+                <span className="rate-input">
+                  =
+                  <input
+                    key={`${c}-${rates(c) ?? ''}`}
+                    type="number"
+                    inputMode="decimal"
+                    defaultValue={rates(c) ?? ''}
+                    placeholder="輸入"
+                    onBlur={async (e) => {
+                      const v = numOrUndef(e.target.value);
+                      if (v && v > 0 && v !== rates(c)) {
+                        await setRate(c, v, today);
+                        say(`${currencyInfo(c).name}匯率已更新`);
+                      }
+                    }}
+                  />
+                  台幣
+                </span>
+              </div>
+            ))}
+          </div>
+          <p className="muted small">
+            {settings.fxUpdated ? `最後更新：${fmtDateLabel(settings.fxUpdated)}。` : ''}可以看銀行 App 的牌告匯率填入；美元匯率和訂閱共用。
+          </p>
         </>
       )}
 
@@ -139,7 +213,7 @@ export function AssetsPage({ openIncome }: { openIncome?: number }) {
 
       {editAccount && <AccountSheet initial={editAccount} onClose={() => setEditAccount(null)} />}
       {balanceOf && <BalanceSheet account={balanceOf} onEdit={() => (setEditAccount(balanceOf), setBalanceOf(null))} onClose={() => setBalanceOf(null)} onSaved={say} />}
-      {income && <IncomeSheet accounts={accounts} onClose={() => setIncome(false)} onSaved={say} />}
+      {income && <IncomeSheet accounts={accounts.filter((a) => currencyOf(a) === 'TWD')} onClose={() => setIncome(false)} onSaved={say} />}
       {toast}
     </>
   );
@@ -148,12 +222,13 @@ export function AssetsPage({ openIncome }: { openIncome?: number }) {
 function AccountSheet({ initial, onClose }: { initial: Partial<Account>; onClose: () => void }) {
   const [name, setName] = useState(initial.name ?? '');
   const [kind, setKind] = useState<Account['kind']>(initial.kind ?? 'bank');
+  const [currency, setCurrency] = useState(currencyOf(initial));
   const [amount, setAmount] = useState('');
   const [error, setError] = useState('');
 
   async function save() {
     if (!name.trim()) return setError('請輸入名稱，例如：郵局、國泰世華');
-    const id = await saveAccount({ id: initial.id, name: name.trim(), kind });
+    const id = await saveAccount({ id: initial.id, name: name.trim(), kind, currency: currency === 'TWD' ? undefined : currency });
     const v = numOrUndef(amount);
     if (!initial.id && v !== undefined) await setBalance(id, v, todayKey());
     onClose();
@@ -201,11 +276,22 @@ function AccountSheet({ initial, onClose }: { initial: Partial<Account>; onClose
       </div>
       <label className="field">
         <span>名稱</span>
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="例如：郵局、國泰世華、台新 Richart" />
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="例如：郵局、國泰世華、國泰 美元帳戶" />
       </label>
+      <div className="field">
+        <span>幣別</span>
+        <div className="chips">
+          {CURRENCIES.map((c) => (
+            <button key={c.code} className={`chip${currency === c.code ? ' selected' : ''}`} onClick={() => setCurrency(c.code)}>
+              {c.name}
+            </button>
+          ))}
+        </div>
+        {initial.id && currency !== currencyOf(initial) && <small className="warn">改幣別不會換算舊的餘額，請之後重新輸入一次餘額</small>}
+      </div>
       {!initial.id && (
         <label className="field">
-          <span>目前餘額（選填）</span>
+          <span>目前餘額（{currencyInfo(currency).name}，選填）</span>
           <input type="number" inputMode="decimal" className="amount-input" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0" />
         </label>
       )}
@@ -225,7 +311,7 @@ function BalanceSheet({ account, onEdit, onClose, onSaved }: { account: Account;
     const v = numOrUndef(amount);
     if (v === undefined) return;
     await setBalance(account.id, v, date);
-    onSaved(`${account.name} 已更新為 ${fmtTWD(v)}`);
+    onSaved(`${account.name} 已更新為 ${fmtMoney(v, currencyOf(account))}`);
     onClose();
   }
 
@@ -246,10 +332,10 @@ function BalanceSheet({ account, onEdit, onClose, onSaved }: { account: Account;
     >
       <div className="big-total small">
         <span>目前餘額</span>
-        <b>{history[0] ? fmtTWD(history[0].amount) : '—'}</b>
+        <b>{history[0] ? fmtMoney(history[0].amount, currencyOf(account)) : '—'}</b>
       </div>
       <label className="field">
-        <span>新的餘額（看存摺或網銀輸入）</span>
+        <span>新的餘額（{currencyInfo(currencyOf(account)).name}，看存摺或網銀輸入）</span>
         <input type="number" inputMode="decimal" className="amount-input" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder={history[0] ? String(history[0].amount) : '0'} autoFocus />
       </label>
       <label className="field">
@@ -267,9 +353,9 @@ function BalanceSheet({ account, onEdit, onClose, onSaved }: { account: Account;
                 <div key={b.id} className="money-row static">
                   <span className="money-main">
                     <span className="money-title">{fmtDateLabel(b.date)}</span>
-                    {prev && <span className="money-sub">{diff >= 0 ? `+${fmtTWD(diff)}` : `−${fmtTWD(-diff)}`}</span>}
+                    {prev && <span className="money-sub">{diff >= 0 ? '+' : '−'}{fmtMoney(Math.abs(diff), currencyOf(account))}</span>}
                   </span>
-                  <span className="money-amt">{fmtTWD(b.amount)}</span>
+                  <span className="money-amt">{fmtMoney(b.amount, currencyOf(account))}</span>
                   <button className="text-btn" aria-label="刪除" onClick={() => confirm('刪除這筆餘額紀錄？') && void db.balances.delete(b.id)}>
                     ×
                   </button>
