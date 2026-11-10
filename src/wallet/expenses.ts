@@ -111,10 +111,12 @@ export async function saveExpense(data: Omit<Expense, 'id' | 'createdAt' | 'dedu
       item: data.item.trim(),
       note: data.note?.trim() || undefined,
       payWith: data.payWith || undefined,
+      backfill: data.backfill || undefined,
+      skipDeduct: data.skipDeduct || undefined,
       createdAt: existing?.createdAt ?? Date.now(),
     };
     await revert(existing, e.date);
-    e.deducted = await deduct(e);
+    e.deducted = e.skipDeduct ? undefined : await deduct(e);
     await db.expenses.put(e);
 
     // 記住品項與這次的金額
@@ -124,10 +126,15 @@ export async function saveExpense(data: Omit<Expense, 'id' | 'createdAt' | 'dedu
       const changed = !existing || existing.item !== e.item || existing.cat !== e.cat || existing.meal !== e.meal;
       await db.quickItems.put({ id, cat: e.cat, meal: e.meal, item: e.item, amount: e.amount, count: (q?.count ?? 0) + (changed ? 1 : 0) || 1, last: Date.now() });
     }
-    // 下次預設用同一個付款方式
-    if (e.payWith) {
-      const s = await db.settings.get('main');
-      if (s && s.lastPayWith !== e.payWith) await db.settings.put({ ...s, lastPayWith: e.payWith });
+    // 下次預設用同一個付款方式；補登記住這次有沒有扣款
+    const s = await db.settings.get('main');
+    if (s) {
+      const next = {
+        ...s,
+        ...(e.payWith ? { lastPayWith: e.payWith } : {}),
+        ...(e.backfill ? { backfillDeduct: !e.skipDeduct } : {}),
+      };
+      if (next.lastPayWith !== s.lastPayWith || next.backfillDeduct !== s.backfillDeduct) await db.settings.put(next);
     }
     return e;
   });

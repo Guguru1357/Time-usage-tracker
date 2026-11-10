@@ -175,6 +175,10 @@ export interface Expense {
   payWith?: string;
   /** 已經從帳戶或禮券扣掉的紀錄，編輯或刪除時用來還原 */
   deducted?: { kind: 'acct' | 'gift'; id: string; amount: number; logId?: string };
+  /** 事後補登的支出 */
+  backfill?: boolean;
+  /** 補登時選擇不從資產扣款（只記帳，帳戶與禮券餘額不變） */
+  skipDeduct?: boolean;
   createdAt: number;
 }
 
@@ -344,6 +348,8 @@ export interface Settings {
   payMethods?: PayMethod[];
   /** 上次記帳用的付款方式 */
   lastPayWith?: string;
+  /** 上次補登時是否從資產扣款；未設定為不扣 */
+  backfillDeduct?: boolean;
   /** 每月幾號提醒輸入薪資；0 或未設定為關閉，預設 7 */
   salaryDay?: number;
   /** 開盤日提醒記錄股票進出的時間；空字串為關閉，預設 14:00 */

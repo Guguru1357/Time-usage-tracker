@@ -2253,3 +2253,28 @@ h3 {
 .transfer-btn {
   margin: 0 0 10px;
 }
+
+/* ---------- 補登 ---------- */
+.fab-secondary {
+  position: fixed;
+  right: calc(max(20px, calc(50% - 320px + 20px)) + 68px);
+  bottom: calc(var(--tabbar-h) + var(--safe-bottom) + 26px);
+  height: 40px;
+  padding: 0 16px;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  box-shadow: var(--shadow);
+  z-index: 10;
+}
+.deduct-toggle {
+  justify-content: space-between;
+  align-items: center;
+  margin: 10px 0 0;
+}
+.deduct-toggle > span:first-child small {
+  display: block;
+}

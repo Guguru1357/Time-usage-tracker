@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { IconPlus } from '../components/Icons';
 import { db, type Expense, type ExpenseCat, type Meal } from '../db';
 import { useSettings } from '../hooks';
-import { dayStart, fmtDateLabel, todayKey } from '../time';
+import { addDays, dayStart, fmtDateLabel, todayKey } from '../time';
 import {
   DEFAULT_USD_RATE,
   MEALS,
@@ -110,6 +110,7 @@ export function LedgerPage() {
                             {c.name}
                             {e.meal ? `・${MEALS[e.meal]}` : ''}
                             {e.payWith ? ` · ${payLabel(e.payWith, payNames)}` : ''}
+                            {e.backfill ? (e.skipDeduct ? ' · 補登（未扣款）' : ' · 補登') : ''}
                             {e.note ? ` · ${e.note}` : ''}
                           </span>
                         </span>
@@ -126,6 +127,9 @@ export function LedgerPage() {
         <LedgerStats month={month} list={list} cats={cats} payNames={payNames} />
       )}
 
+      <button className="fab-secondary" onClick={() => setEditing({ backfill: true, date: addDays(todayKey(), -1) })}>
+        補登
+      </button>
       <button className="fab" onClick={() => setEditing({})} aria-label="記一筆">
         <IconPlus size={26} />
       </button>
@@ -259,6 +263,10 @@ export function ExpenseSheet({ initial, cats, onClose, onSaved }: { initial: Par
   const [error, setError] = useState('');
   const settings = useSettings();
   const [payWith, setPayWith] = useState<string | undefined>(initial.id ? initial.payWith : undefined);
+  const [backfill, setBackfill] = useState(!!initial.backfill);
+  // 補登預設沿用上次的選擇（第一次為不扣款）；編輯時照原本的設定
+  const [deductChoice, setDeductChoice] = useState<boolean | undefined>(initial.id ? !initial.skipDeduct : undefined);
+  const deductBackfill = deductChoice ?? settings.backfillDeduct ?? false;
   const [adding, setAdding] = useState(false);
   const [newPay, setNewPay] = useState('');
   const options = useLiveQuery(() => payOptions()) ?? [];
@@ -285,8 +293,10 @@ export function ExpenseSheet({ initial, cats, onClose, onSaved }: { initial: Par
   async function save() {
     const v = numOrUndef(amount);
     if (!v || v <= 0) return setError('請輸入金額');
-    await saveExpense({ id: initial.id, date, amount: v, cat, meal: m, item, note, payWith: chosen });
-    onSaved(`已記錄 ${fmtTWD(v)}${chosenOpt?.deducts ? `，已從${chosenOpt.label}扣款` : ''}`);
+    const skipDeduct = backfill && !deductBackfill;
+    await saveExpense({ id: initial.id, date, amount: v, cat, meal: m, item, note, payWith: chosen, backfill, skipDeduct });
+    const deducted = chosenOpt?.deducts && !skipDeduct;
+    onSaved(`已${backfill ? '補登' : '記錄'} ${fmtTWD(v)}${deducted ? `，已從${chosenOpt.label}扣款` : backfill && chosenOpt?.deducts ? '，未扣資產' : ''}`);
     onClose();
   }
 
@@ -298,7 +308,7 @@ export function ExpenseSheet({ initial, cats, onClose, onSaved }: { initial: Par
 
   return (
     <Sheet
-      title={initial.id ? '編輯支出' : '記一筆'}
+      title={initial.id ? (backfill ? '編輯補登' : '編輯支出') : backfill ? '補登支出' : '記一筆'}
       onClose={onClose}
       actions={
         <>
@@ -378,6 +388,13 @@ export function ExpenseSheet({ initial, cats, onClose, onSaved }: { initial: Par
         <input type="date" value={date} onChange={(e) => e.target.value && setDate(e.target.value)} />
         <small className="muted">{fmtDateLabel(date)}</small>
       </label>
+      <label className="toggle-row">
+        <input type="checkbox" checked={backfill} onChange={(e) => setBackfill(e.target.checked)} />
+        <span>
+          補登
+          <small className="muted">事後補記的支出，可以選擇要不要從資產扣款</small>
+        </span>
+      </label>
       <div className="field">
         <span>付款方式</span>
         <div className="chips">
@@ -409,7 +426,20 @@ export function ExpenseSheet({ initial, cats, onClose, onSaved }: { initial: Par
             ))}
           </div>
         )}
-        {chosenOpt && <small className="muted">{chosenOpt.deducts ? `儲存後會${chosenOpt.hint}` : `${chosenOpt.hint ?? ''}：只標記，不扣餘額`}</small>}
+        {backfill && chosenOpt?.deducts ? (
+          <label className="toggle-row deduct-toggle">
+            <span>
+              從資產扣款
+              <small className="muted">{deductBackfill ? `儲存後會${chosenOpt.hint}` : '只記帳，帳戶與禮券餘額不變（例如餘額已經是最新的）'}</small>
+            </span>
+            <span className="switch">
+              <input type="checkbox" checked={deductBackfill} onChange={(e) => setDeductChoice(e.target.checked)} />
+              <span />
+            </span>
+          </label>
+        ) : (
+          chosenOpt && <small className="muted">{chosenOpt.deducts ? `儲存後會${chosenOpt.hint}` : `${chosenOpt.hint ?? ''}：只標記，不扣餘額`}</small>
+        )}
         {chosen?.startsWith('pay:') && (
           <button
             className="text-btn left"

@@ -232,6 +232,31 @@ describe('money', () => {
     clock.mockRestore();
   });
 
+  it('backfilled expenses can skip deducting from assets', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_800_000_000_000);
+    const post = await saveAccount({ name: '郵局', kind: 'deposit' });
+    await setBalance(post, 10_000, '2026-11-01');
+    const bal = async () => balancesAt(await db.balances.toArray()).get(post)!.amount;
+
+    // 補登、不扣款：餘額不變，也沒有扣款紀錄
+    const e = await saveExpense({ date: '2026-11-03', amount: 500, cat: 'shopping', item: '鞋', payWith: `acct:${post}`, backfill: true, skipDeduct: true });
+    expect(await bal()).toBe(10_000);
+    expect(e.deducted).toBeUndefined();
+    expect((await db.settings.get('main'))?.backfillDeduct).toBe(false);
+
+    // 改成要扣款：扣掉；再改回不扣：還原
+    const e2 = await saveExpense({ ...e, skipDeduct: false });
+    expect(await bal()).toBe(9_500);
+    expect((await db.settings.get('main'))?.backfillDeduct).toBe(true);
+    await saveExpense({ ...e2, skipDeduct: true });
+    expect(await bal()).toBe(10_000);
+
+    // 刪除未扣款的補登不會動到餘額
+    await deleteExpense(e.id);
+    expect(await bal()).toBe(10_000);
+    clock.mockRestore();
+  });
+
   it('remembers items and their last price', async () => {
     await saveExpense({ date: '2026-11-09', amount: 110, cat: 'food', meal: 'meal', item: '排骨便當' });
     await saveExpense({ date: '2026-11-10', amount: 120, cat: 'food', meal: 'meal', item: '排骨便當' });
