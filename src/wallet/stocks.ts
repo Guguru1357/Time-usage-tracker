@@ -1,52 +1,12 @@
 import { db, type Trade } from '../db';
 import { adjustBalance } from './assets';
+import { analyzePositions, tradeCash } from './positions';
+
+export { analyzePositions, holdingsCost, isUS, sortTrades, tradeAmount, tradeCash, tradeFx, type Holding } from './positions';
 import { addDays, dayStart } from '../time';
 import { round2 } from './money';
 
-export function tradeAmount(t: Trade): number {
-  return t.price * t.shares;
-}
 
-export function sortTrades(list: Trade[]): Trade[] {
-  return [...list].sort((a, b) => a.date.localeCompare(b.date) || (a.time ?? '').localeCompare(b.time ?? '') || a.createdAt - b.createdAt);
-}
-
-export interface Holding {
-  symbol: string;
-  name?: string;
-  shares: number;
-  /** 平均成本（含手續費） */
-  avgCost: number;
-}
-
-/**
- * 以平均成本法計算持股與每筆賣出的已實現損益。
- * 賣出股數超過持股時，只就持有的部分計算。
- */
-export function analyzePositions(trades: Trade[]): { holdings: Holding[]; realized: Map<string, number> } {
-  const pos = new Map<string, { shares: number; cost: number; name?: string }>();
-  const realized = new Map<string, number>();
-  for (const t of sortTrades(trades)) {
-    const p = pos.get(t.symbol) ?? { shares: 0, cost: 0 };
-    if (t.name) p.name = t.name;
-    const fee = t.fee ?? 0;
-    if (t.side === 'buy') {
-      p.cost += t.price * t.shares + fee;
-      p.shares += t.shares;
-    } else {
-      const qty = Math.min(t.shares, p.shares);
-      const avg = p.shares ? p.cost / p.shares : 0;
-      realized.set(t.id, round2(t.price * qty - fee - avg * qty));
-      p.cost -= avg * qty;
-      p.shares -= qty;
-    }
-    pos.set(t.symbol, p);
-  }
-  const holdings = [...pos.entries()]
-    .filter(([, p]) => p.shares > 0)
-    .map(([symbol, p]) => ({ symbol, name: p.name, shares: p.shares, avgCost: round2(p.cost / p.shares) }));
-  return { holdings, realized };
-}
 
 export interface TradeReport {
   count: number;
@@ -92,12 +52,6 @@ export function dailyCounts(trades: Trade[], to: string, days: number): { date: 
 
 // ---------- 與證券交割戶同步 ----------
 
-/** 這筆交易對交割戶的金額變動：買進付出（含手續費），賣出收入（扣手續費） */
-export function tradeCash(t: Pick<Trade, 'side' | 'price' | 'shares' | 'fee'>): number {
-  const gross = t.price * t.shares;
-  const fee = t.fee ?? 0;
-  return round2(t.side === 'buy' ? -(gross + fee) : gross - fee);
-}
 
 /**
  * 儲存交易並同步帳戶餘額。

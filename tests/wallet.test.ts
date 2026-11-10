@@ -36,7 +36,7 @@ describe('stocks', () => {
     const s = trade({ side: 'sell', price: 130, shares: 1000, date: '2026-11-04' });
     const { holdings, realized } = analyzePositions([s, b, a]);
     expect(realized.get(s.id)).toBe(20_000);
-    expect(holdings).toEqual([{ symbol: '2330', name: undefined, shares: 1000, avgCost: 110 }]);
+    expect(holdings).toEqual([{ symbol: '2330', name: undefined, market: 'TW', shares: 1000, avgCost: 110, costTWD: 110_000 }]);
   });
 
   it('summarises trades, DCA and realized P&L for a period', () => {
@@ -137,6 +137,26 @@ describe('stock ↔ broker account sync', () => {
     expect(await bal()).toBe(200_000 - 110_142);
     await deleteTrade(buy.id);
     expect(await bal()).toBe(200_000);
+    clock.mockRestore();
+  });
+
+  it('settles US stocks in TWD at the trade rate', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_800_000_000_000);
+    const broker = await saveAccount({ name: '複委託交割戶', kind: 'broker' });
+    await setBalance(broker, 100_000, '2026-11-01');
+    const bal = async () => balancesAt(await db.balances.toArray()).get(broker)!.amount;
+    // 買 10 股 AAPL @ US$200、手續費 US$3，匯率 32 → 扣 NT$64,096
+    const buy = trade({ market: 'US', symbol: 'AAPL', price: 200, shares: 10, fee: 3, fx: 32, accountId: broker });
+    await saveTrade(buy);
+    expect(await bal()).toBe(100_000 - 64_096);
+    // 賣 4 股 @ US$250、匯率 31：入帳 (1000 − 0) × 31 = 31,000；成本 64,096 × 0.4 = 25,638.4
+    const sell = trade({ market: 'US', symbol: 'AAPL', side: 'sell', price: 250, shares: 4, fx: 31, date: '2026-11-05', accountId: broker });
+    await saveTrade(sell);
+    expect(await bal()).toBe(100_000 - 64_096 + 31_000);
+    const { holdings, realized } = analyzePositions([buy, sell]);
+    expect(realized.get(sell.id)).toBe(5_361.6);
+    expect(holdings[0]).toMatchObject({ symbol: 'AAPL', market: 'US', shares: 6, avgCost: 200.3, costTWD: 38_457.6 });
+    expect(holdingsCost([buy, sell])).toBe(38_457.6);
     clock.mockRestore();
   });
 

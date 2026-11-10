@@ -1,4 +1,4 @@
-import { db, normalizeAccountKind, uid, type Account, type AccountKind, type Balance, type Income, type Settings, type Trade, type Transfer } from '../db';
+import { db, normalizeAccountKind, uid, type Account, type AccountKind, type Balance, type Income, type Settings, type Transfer } from '../db';
 import { DEFAULT_USD_RATE, fmtTWD, round2 } from './money';
 
 /** 常用外幣；符號用於顯示金額 */
@@ -58,27 +58,7 @@ export function accountKind(a: Pick<Account, 'kind' | 'currency'>): AccountKind 
   return normalizeAccountKind(a.kind, a.currency);
 }
 
-/** 持股成本（平均成本 × 股數），date 之前（含）的交易 */
-export function holdingsCost(trades: Trade[], date?: string): number {
-  const pos = new Map<string, { shares: number; cost: number }>();
-  const list = [...trades]
-    .filter((t) => !date || t.date <= date)
-    .sort((a, b) => a.date.localeCompare(b.date) || (a.time ?? '').localeCompare(b.time ?? '') || a.createdAt - b.createdAt);
-  for (const t of list) {
-    const p = pos.get(t.symbol) ?? { shares: 0, cost: 0 };
-    if (t.side === 'buy') {
-      p.cost += t.price * t.shares + (t.fee ?? 0);
-      p.shares += t.shares;
-    } else {
-      const qty = Math.min(t.shares, p.shares);
-      const avg = p.shares ? p.cost / p.shares : 0;
-      p.cost -= avg * qty;
-      p.shares -= qty;
-    }
-    pos.set(t.symbol, p);
-  }
-  return round2([...pos.values()].reduce((a, p) => a + (p.shares > 0 ? p.cost : 0), 0));
-}
+export { holdingsCost } from './positions';
 
 /**
  * 新餘額紀錄的建立時間：一定比這個帳戶最新的一筆晚。

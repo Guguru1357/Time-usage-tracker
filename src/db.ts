@@ -295,13 +295,19 @@ export interface Trade {
   /** HH:MM，選填 */
   time?: string;
   side: 'buy' | 'sell';
-  /** 股票代號，例如 2330 */
+  /** 台股或美股；未設定為台股 */
+  market?: 'TW' | 'US';
+  /** 股票代號，例如 2330、AAPL */
   symbol: string;
   name?: string;
+  /** 成交價（台股台幣、美股美元） */
   price: number;
-  /** 股數（1 張 = 1000 股） */
+  /** 股數（台股 1 張 = 1000 股；美股可有小數） */
   shares: number;
+  /** 手續費（與成交價同幣別） */
   fee?: number;
+  /** 美股：當時的匯率（1 美元 = 多少台幣），交割戶以台幣扣款 */
+  fx?: number;
   /** 舊版欄位：下單心情（已不再使用） */
   emotion?: Emotion;
   /** 定期定額（自動扣款買進） */

@@ -5,11 +5,18 @@ import { db, uid, type Trade } from '../db';
 import { rescheduleReminders } from '../notifications';
 import { addDays, fmtDateLabel, fmtHM, todayKey } from '../time';
 import { fmtNum, fmtTWD, round2 } from './money';
-import { accountKind, currencyOf } from './assets';
-import { analyzePositions, dailyCounts, deleteTrade, markTradeDay, reportedTradeDays, saveTrade, sortTrades, tradeAmount, tradeCash, tradeReport, weeklyCounts } from './stocks';
+import { accountKind, currencyOf, fmtMoney } from './assets';
+import { useSettings } from '../hooks';
+import { DEFAULT_USD_RATE } from './money';
+import { analyzePositions, dailyCounts, deleteTrade, markTradeDay, reportedTradeDays, saveTrade, sortTrades, tradeAmount, tradeCash, tradeFx, tradeReport, weeklyCounts } from './stocks';
 import { BarChart, Sheet, numOrUndef, useToast } from './ui';
 
 const PERIOD_DAYS = 30;
+
+/** 美股可以有零股小數，最多顯示 4 位 */
+function fmtNum4(n: number): string {
+  return n.toLocaleString('zh-TW', { maximumFractionDigits: 4 });
+}
 
 function pnlText(v: number): string {
   if (Math.abs(v) < 0.5) return 'NT$0';
@@ -125,16 +132,22 @@ export function StocksPage({ focus }: { focus?: { date: string; action?: 'noTrad
           <h3>目前持股（平均成本）</h3>
           <div className="money-list">
             {holdings.map((h) => (
-              <div key={h.symbol} className="money-row static">
+              <div key={`${h.market}${h.symbol}`} className="money-row static">
                 <span className="money-main">
                   <span className="money-title">
                     {h.symbol} {h.name}
+                    {h.market === 'US' && <span className="tag">美股</span>}
                   </span>
                   <span className="money-sub">
-                    {h.shares % 1000 === 0 ? `${h.shares / 1000} 張` : `${fmtNum(h.shares)} 股`} · 均價 {h.avgCost}
+                    {h.market === 'US'
+                      ? `${fmtNum4(h.shares)} 股 · 均價 US$${h.avgCost}`
+                      : `${h.shares % 1000 === 0 ? `${h.shares / 1000} 張` : `${fmtNum(h.shares)} 股`} · 均價 ${h.avgCost}`}
                   </span>
                 </span>
-                <span className="money-amt">{fmtTWD(h.avgCost * h.shares)}</span>
+                <span className="money-amt">
+                  {h.market === 'US' && <span>{fmtMoney(h.avgCost * h.shares, 'USD')}</span>}
+                  {h.market === 'US' ? <small>成本 {fmtTWD(h.costTWD)}</small> : fmtTWD(h.costTWD)}
+                </span>
               </div>
             ))}
           </div>
@@ -160,13 +173,18 @@ export function StocksPage({ focus }: { focus?: { date: string; action?: 'noTrad
                     <span className="money-main">
                       <span className="money-title">
                         {t.symbol} {t.name}
+                        {t.market === 'US' && <span className="tag">美股</span>}
                       </span>
                       <span className="money-sub">
-                        {t.price} × {t.shares % 1000 === 0 ? `${t.shares / 1000} 張` : `${fmtNum(t.shares)} 股`} {t.dca ? ' · 定期定額' : ''}
+                        {t.market === 'US'
+                          ? `US$${t.price} × ${fmtNum4(t.shares)} 股 · 匯率 ${tradeFx(t)}`
+                          : `${t.price} × ${t.shares % 1000 === 0 ? `${t.shares / 1000} 張` : `${fmtNum(t.shares)} 股`}`}
+                        {t.dca ? ' · 定期定額' : ''}
                       </span>
                     </span>
                     <span className="money-amt">
-                      {fmtTWD(tradeAmount(t))}
+                      {t.market === 'US' ? fmtMoney(tradeAmount(t), 'USD') : fmtTWD(tradeAmount(t))}
+                      {t.market === 'US' && <small>≈ {fmtTWD(tradeAmount(t) * tradeFx(t))}</small>}
                       {r !== undefined && <small className={r >= 0 ? 'gain' : 'loss'}>{pnlText(r)}</small>}
                     </span>
                   </button>
@@ -187,7 +205,12 @@ export function StocksPage({ focus }: { focus?: { date: string; action?: 'noTrad
 }
 
 function TradeSheet({ initial, trades, onClose, onSaved }: { initial: Partial<Trade>; trades: Trade[]; onClose: () => void; onSaved: (m: string) => void }) {
+  const settings = useSettings();
   const [side, setSide] = useState<Trade['side']>(initial.side ?? 'buy');
+  const [market, setMarket] = useState<'TW' | 'US'>(initial.market ?? 'TW');
+  const [fx, setFx] = useState(initial.fx ? String(initial.fx) : '');
+  const us = market === 'US';
+  const fxValue = numOrUndef(fx) ?? settings.usdRate ?? DEFAULT_USD_RATE;
   const [symbol, setSymbol] = useState(initial.symbol ?? '');
   const [name, setName] = useState(initial.name ?? '');
   const [price, setPrice] = useState(initial.price ? String(initial.price) : '');
@@ -211,15 +234,17 @@ function TradeSheet({ initial, trades, onClose, onSaved }: { initial: Partial<Tr
   const syncTo = accountId === undefined ? firstBroker?.id : (accountId ?? undefined);
 
   // 交易過的股票，最近的在前
-  const known = new Map<string, string | undefined>();
-  for (const t of sortTrades(trades).reverse()) if (!known.has(t.symbol)) known.set(t.symbol, t.name);
-  const shares = (numOrUndef(qty) ?? 0) * (unit === 'lot' && !dca ? 1000 : 1);
+  const known = new Map<string, { name?: string; market: 'TW' | 'US' }>();
+  for (const t of sortTrades(trades).reverse()) if (!known.has(t.symbol)) known.set(t.symbol, { name: t.name, market: t.market ?? 'TW' });
+  // 美股沒有「張」，數量一律是股（可有小數）
+  const shares = (numOrUndef(qty) ?? 0) * (unit === 'lot' && !dca && !us ? 1000 : 1);
   const p = numOrUndef(price) ?? 0;
 
   function autoShares(amountText: string, priceText: string) {
     const a = numOrUndef(amountText);
     const pr = numOrUndef(priceText);
-    if (a && pr) setQty(String(Math.floor(a / pr)));
+    // 美股可以買零股小數；台股取整數股
+    if (a && pr) setQty(String(us ? Math.floor((a / pr) * 10000) / 10000 : Math.floor(a / pr)));
   }
 
   async function save() {
@@ -230,6 +255,8 @@ function TradeSheet({ initial, trades, onClose, onSaved }: { initial: Partial<Tr
       date,
       time: time || undefined,
       side: dca ? 'buy' : side,
+      market: us ? 'US' : undefined,
+      fx: us ? fxValue : undefined,
       symbol: symbol.trim().toUpperCase(),
       name: name.trim() || undefined,
       price: p,
@@ -288,6 +315,14 @@ function TradeSheet({ initial, trades, onClose, onSaved }: { initial: Partial<Tr
           <small className="muted">（自動扣款買進）</small>
         </span>
       </label>
+      <div className="segmented">
+        <button className={!us ? 'active' : ''} onClick={() => setMarket('TW')}>
+          台股
+        </button>
+        <button className={us ? 'active' : ''} onClick={() => setMarket('US')}>
+          美股
+        </button>
+      </div>
       {!dca && (
         <div className="segmented">
           <button className={side === 'buy' ? 'active' : ''} onClick={() => setSide('buy')}>
@@ -301,32 +336,33 @@ function TradeSheet({ initial, trades, onClose, onSaved }: { initial: Partial<Tr
       <div className="two-col">
         <label className="field">
           <span>代號</span>
-          <input value={symbol} onChange={(e) => setSymbol(e.target.value)} placeholder="例如 2330" />
+          <input value={symbol} onChange={(e) => setSymbol(e.target.value)} placeholder={us ? '例如 AAPL' : '例如 2330'} />
         </label>
         <label className="field">
           <span>名稱（選填）</span>
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="例如 台積電" />
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder={us ? '例如 蘋果' : '例如 台積電'} />
         </label>
       </div>
       {known.size > 0 && (
         <div className="chips">
-          {[...known.entries()].slice(0, 8).map(([s, n]) => (
+          {[...known.entries()].slice(0, 8).map(([s, k]) => (
             <button
               key={s}
               className={`chip${symbol === s ? ' selected' : ''}`}
               onClick={() => {
                 setSymbol(s);
-                setName(n ?? '');
+                setName(k.name ?? '');
+                setMarket(k.market);
               }}
             >
-              {s} {n}
+              {s} {k.name}
             </button>
           ))}
         </div>
       )}
       {dca && (
         <label className="field">
-          <span>扣款金額（選填，填了會自動算股數）</span>
+          <span>扣款金額（{us ? '美元' : '台幣'}，選填，填了會自動算股數）</span>
           <input
             type="number"
             inputMode="decimal"
@@ -341,7 +377,7 @@ function TradeSheet({ initial, trades, onClose, onSaved }: { initial: Partial<Tr
       )}
       <div className="two-col">
         <label className="field">
-          <span>成交價</span>
+          <span>成交價{us ? '（美元）' : ''}</span>
           <input
             type="number"
             inputMode="decimal"
@@ -356,7 +392,8 @@ function TradeSheet({ initial, trades, onClose, onSaved }: { initial: Partial<Tr
           <span>{dca ? '股數' : '數量'}</span>
           <div className="qty-row">
             <input type="number" inputMode="decimal" value={qty} onChange={(e) => setQty(e.target.value)} />
-            {!dca && (
+            {us && <span className="muted small">股</span>}
+            {!dca && !us && (
               <>
                 <button className={`chip${unit === 'lot' ? ' selected' : ''}`} onClick={() => setUnit('lot')}>
                   張
@@ -369,7 +406,18 @@ function TradeSheet({ initial, trades, onClose, onSaved }: { initial: Partial<Tr
           </div>
         </div>
       </div>
-      {p > 0 && shares > 0 && <div className="muted small">金額 {fmtTWD(round2(p * shares))}</div>}
+      {us && (
+        <label className="field">
+          <span>匯率（1 美元 = 多少台幣）</span>
+          <input type="number" inputMode="decimal" value={fx} onChange={(e) => setFx(e.target.value)} placeholder={String(settings.usdRate ?? DEFAULT_USD_RATE)} />
+          <small className="muted">不填就用資產頁設定的美元匯率；填券商實際成交的匯率最準</small>
+        </label>
+      )}
+      {p > 0 && shares > 0 && (
+        <div className="muted small">
+          金額 {us ? `${fmtMoney(round2(p * shares), 'USD')} ≈ ${fmtTWD(p * shares * fxValue)}` : fmtTWD(round2(p * shares))}
+        </div>
+      )}
 
       <label className="field">
         <span>{dca ? '備註（選填）' : '理由（選填）'}</span>
@@ -386,7 +434,7 @@ function TradeSheet({ initial, trades, onClose, onSaved }: { initial: Partial<Tr
         </label>
       </div>
       <label className="field">
-        <span>手續費＋稅（選填）</span>
+        <span>手續費＋稅{us ? '（美元）' : ''}（選填）</span>
         <input type="number" inputMode="decimal" value={fee} onChange={(e) => setFee(e.target.value)} placeholder="不填也可以" />
       </label>
       <div className="field">
@@ -408,8 +456,8 @@ function TradeSheet({ initial, trades, onClose, onSaved }: { initial: Partial<Tr
             {syncTo && p > 0 && shares > 0 && (
               <small className="muted">
                 {(() => {
-                  const c = tradeCash({ side: dca ? 'buy' : side, price: p, shares, fee: numOrUndef(fee) });
-                  return `${accounts.find((a) => a.id === syncTo)?.name} ${c < 0 ? '扣款' : '入帳'} ${fmtTWD(Math.abs(c))}`;
+                  const c = tradeCash({ side: dca ? 'buy' : side, price: p, shares, fee: numOrUndef(fee), market, fx: fxValue });
+                  return `${accounts.find((a) => a.id === syncTo)?.name} ${c < 0 ? '扣款' : '入帳'} ${fmtTWD(Math.abs(c))}${us ? '（已換算台幣）' : ''}`;
                 })()}
               </small>
             )}
