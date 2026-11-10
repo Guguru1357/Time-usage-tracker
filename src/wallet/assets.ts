@@ -1,4 +1,4 @@
-import { db, normalizeAccountKind, uid, type Account, type AccountKind, type Balance, type Income, type Settings, type Trade } from '../db';
+import { db, normalizeAccountKind, uid, type Account, type AccountKind, type Balance, type Income, type Settings, type Trade, type Transfer } from '../db';
 import { DEFAULT_USD_RATE, fmtTWD, round2 } from './money';
 
 /** 常用外幣；符號用於顯示金額 */
@@ -177,4 +177,42 @@ export async function addIncome(data: Omit<Income, 'id'>, addToAccount: boolean)
 
 export function salaryInMonth(incomes: Income[], month: string): Income[] {
   return incomes.filter((i) => i.kind === 'salary' && i.date.startsWith(month));
+}
+
+// ---------- 帳戶之間轉帳 ----------
+
+async function applyTransfer(t: Transfer, sign: 1 | -1): Promise<void> {
+  await adjustBalance(t.fromId, -sign * round2(t.amount + (t.fee ?? 0)), t.date);
+  await adjustBalance(t.toId, sign * t.toAmount, t.date);
+}
+
+/** 新增或修改轉帳；修改時先還原舊的金額再套用新的 */
+export async function saveTransfer(data: Omit<Transfer, 'id' | 'createdAt'> & { id?: string }): Promise<Transfer> {
+  if (data.fromId === data.toId) throw new Error('轉出和轉入不能是同一個帳戶');
+  if (!(data.amount > 0) || !(data.toAmount > 0)) throw new Error('請輸入金額');
+  return db.transaction('rw', db.transfers, db.balances, async () => {
+    const prev = data.id ? await db.transfers.get(data.id) : undefined;
+    if (prev) await applyTransfer(prev, -1);
+    const t: Transfer = {
+      ...data,
+      id: data.id ?? uid(),
+      amount: round2(data.amount),
+      toAmount: round2(data.toAmount),
+      fee: data.fee ? round2(data.fee) : undefined,
+      note: data.note?.trim() || undefined,
+      createdAt: prev?.createdAt ?? Date.now(),
+    };
+    await applyTransfer(t, 1);
+    await db.transfers.put(t);
+    return t;
+  });
+}
+
+export async function deleteTransfer(id: string): Promise<void> {
+  await db.transaction('rw', db.transfers, db.balances, async () => {
+    const t = await db.transfers.get(id);
+    if (!t) return;
+    await applyTransfer(t, -1);
+    await db.transfers.delete(id);
+  });
 }

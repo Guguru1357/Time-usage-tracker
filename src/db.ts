@@ -258,6 +258,22 @@ export interface Balance {
   createdAt: number;
 }
 
+/** 帳戶之間轉帳：轉出帳戶減少、轉入帳戶增加 */
+export interface Transfer {
+  id: string;
+  date: string;
+  fromId: string;
+  toId: string;
+  /** 轉出金額（轉出帳戶的幣別） */
+  amount: number;
+  /** 轉入金額（轉入帳戶的幣別）；同幣別時等於 amount */
+  toAmount: number;
+  /** 手續費，從轉出帳戶扣 */
+  fee?: number;
+  note?: string;
+  createdAt: number;
+}
+
 export interface Income {
   id: string;
   date: string;
@@ -350,6 +366,7 @@ export class TimeLedgerDB extends Dexie {
   balances!: EntityTable<Balance, 'id'>;
   incomes!: EntityTable<Income, 'id'>;
   trades!: EntityTable<Trade, 'id'>;
+  transfers!: EntityTable<Transfer, 'id'>;
 
   constructor(name = 'time-ledger') {
     super(name);
@@ -396,6 +413,8 @@ export class TimeLedgerDB extends Dexie {
       .upgrade(async (tx) => {
         if ((await tx.table('expenseCats').count()) === 0) await tx.table('expenseCats').bulkAdd(defaultExpenseCats());
       });
+    // v6：帳戶之間轉帳
+    this.version(6).stores({ transfers: 'id, date' });
     // v5：帳戶分成綜合存款／證券／外幣
     this.version(5).upgrade((tx) =>
       tx

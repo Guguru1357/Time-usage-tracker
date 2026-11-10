@@ -1,6 +1,6 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useEffect, useState } from 'react';
-import { db, type Account, type AccountKind, type Income } from '../db';
+import { db, type Account, type AccountKind, type Income, type Transfer } from '../db';
 import { rescheduleReminders } from '../notifications';
 import { fmtDateLabel, todayKey } from '../time';
 import { useSettings } from '../hooks';
@@ -15,6 +15,8 @@ import {
   balancesAt,
   currencyInfo,
   currencyOf,
+  deleteTransfer,
+  saveTransfer,
   fmtMoney,
   rateOf,
   salaryInMonth,
@@ -39,10 +41,13 @@ const KIND_PLACEHOLDER: Record<AccountKind, string> = {
 };
 
 export function AssetsPage({ openIncome }: { openIncome?: number }) {
-  const accounts = (useLiveQuery(() => db.accounts.orderBy('order').toArray()) ?? []).filter((a) => !a.archived);
+  const allAccounts = useLiveQuery(() => db.accounts.orderBy('order').toArray()) ?? [];
+  const accounts = allAccounts.filter((a) => !a.archived);
   const balances = useLiveQuery(() => db.balances.toArray()) ?? [];
   const incomes = useLiveQuery(() => db.incomes.orderBy('date').reverse().toArray()) ?? [];
   const trades = useLiveQuery(() => db.trades.toArray()) ?? [];
+  const transfers = useLiveQuery(() => db.transfers.orderBy('date').reverse().toArray()) ?? [];
+  const [transfer, setTransfer] = useState<Partial<Transfer> | null>(null);
   const [editAccount, setEditAccount] = useState<Partial<Account> | null>(null);
   const [balanceOf, setBalanceOf] = useState<Account | null>(null);
   const [income, setIncome] = useState(false);
@@ -100,6 +105,12 @@ export function AssetsPage({ openIncome }: { openIncome?: number }) {
           <div className="warn">還沒設定 {totals.missing.map((c) => currencyInfo(c).name).join('、')} 的匯率，這些帳戶沒有算進總資產</div>
         )}
       </div>
+
+      {accounts.length > 1 && (
+        <button className="btn block transfer-btn" onClick={() => setTransfer({})}>
+          ⇄ 帳戶之間轉帳
+        </button>
+      )}
 
       <button className={`salary-card${salary.length ? ' done' : ''}`} onClick={() => setIncome(true)}>
         <span>
@@ -214,6 +225,41 @@ export function AssetsPage({ openIncome }: { openIncome?: number }) {
         </>
       )}
 
+      {transfers.length > 0 && (
+        <>
+          <div className="section-head">
+            <h3>轉帳紀錄</h3>
+            <button className="text-btn" onClick={() => setTransfer({})}>
+              ＋ 轉帳
+            </button>
+          </div>
+          <div className="money-list">
+            {transfers.slice(0, 10).map((t) => {
+              const from = allAccounts.find((a) => a.id === t.fromId);
+              const to = allAccounts.find((a) => a.id === t.toId);
+              return (
+                <button key={t.id} className="money-row" onClick={() => setTransfer(t)}>
+                  <span className="money-main">
+                    <span className="money-title">
+                      {from?.name ?? '（已刪除）'} → {to?.name ?? '（已刪除）'}
+                    </span>
+                    <span className="money-sub">
+                      {fmtDateLabel(t.date)}
+                      {t.fee ? ` · 手續費 ${fmtTWD(t.fee)}` : ''}
+                      {t.note ? ` · ${t.note}` : ''}
+                    </span>
+                  </span>
+                  <span className="money-amt">
+                    {fmtMoney(t.amount, from ? currencyOf(from) : 'TWD')}
+                    {from && to && currencyOf(from) !== currencyOf(to) && <small>→ {fmtMoney(t.toAmount, currencyOf(to))}</small>}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </>
+      )}
+
       <h3>近 12 個月總資產</h3>
       <div className="card chart-card">
         <BarChart bars={trend} format={fmtTWD} empty="輸入帳戶餘額後會顯示" />
@@ -255,6 +301,7 @@ export function AssetsPage({ openIncome }: { openIncome?: number }) {
         </div>
       )}
 
+      {transfer && <TransferSheet initial={transfer} accounts={accounts} rates={rates} onClose={() => setTransfer(null)} onSaved={say} />}
       {editAccount && <AccountSheet initial={editAccount} onClose={() => setEditAccount(null)} />}
       {balanceOf && <BalanceSheet account={balanceOf} onEdit={() => (setEditAccount(balanceOf), setBalanceOf(null))} onClose={() => setBalanceOf(null)} onSaved={say} />}
       {income && <IncomeSheet accounts={accounts.filter((a) => accountKind(a) === 'deposit' && currencyOf(a) === 'TWD')} onClose={() => setIncome(false)} onSaved={say} />}
@@ -477,6 +524,145 @@ function IncomeSheet({ accounts, onClose, onSaved }: { accounts: Account[]; onCl
         <span>備註（選填）</span>
         <input value={note} onChange={(e) => setNote(e.target.value)} />
       </label>
+    </Sheet>
+  );
+}
+
+function TransferSheet({
+  initial,
+  accounts,
+  rates,
+  onClose,
+  onSaved,
+}: {
+  initial: Partial<Transfer>;
+  accounts: Account[];
+  rates: (code: string) => number | undefined;
+  onClose: () => void;
+  onSaved: (m: string) => void;
+}) {
+  const [fromId, setFromId] = useState(initial.fromId ?? accounts.find((a) => accountKind(a) === 'deposit')?.id);
+  const [toId, setToId] = useState(initial.toId ?? accounts.find((a) => accountKind(a) === 'broker')?.id);
+  const [amount, setAmount] = useState(initial.amount ? String(initial.amount) : '');
+  const [toAmount, setToAmount] = useState(initial.toAmount ? String(initial.toAmount) : '');
+  const [fee, setFee] = useState(initial.fee ? String(initial.fee) : '');
+  const [date, setDate] = useState(initial.date ?? todayKey());
+  const [note, setNote] = useState(initial.note ?? '');
+  const [error, setError] = useState('');
+  const from = accounts.find((a) => a.id === fromId);
+  const to = accounts.find((a) => a.id === toId);
+  const fromCur = from ? currencyOf(from) : 'TWD';
+  const toCur = to ? currencyOf(to) : 'TWD';
+  const cross = fromCur !== toCur;
+  // 不同幣別時用匯率估一個入帳金額，使用者可以改成實際入帳的數字
+  const estimate = (() => {
+    const v = numOrUndef(amount);
+    const r1 = rates(fromCur);
+    const r2 = rates(toCur);
+    return v && r1 && r2 ? Math.round(((v * r1) / r2) * 100) / 100 : undefined;
+  })();
+
+  async function save() {
+    const v = numOrUndef(amount);
+    if (!fromId || !toId) return setError('請選擇轉出和轉入帳戶');
+    if (!v || v <= 0) return setError('請輸入金額');
+    try {
+      await saveTransfer({
+        id: initial.id,
+        date,
+        fromId,
+        toId,
+        amount: v,
+        toAmount: cross ? (numOrUndef(toAmount) ?? estimate ?? 0) : v,
+        fee: numOrUndef(fee),
+        note,
+      });
+      onSaved(`已轉帳 ${fmtMoney(v, fromCur)}：${from?.name} → ${to?.name}`);
+      onClose();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  async function remove() {
+    if (!initial.id || !confirm('刪除這筆轉帳？兩個帳戶的餘額會還原。')) return;
+    await deleteTransfer(initial.id);
+    onClose();
+  }
+
+  const chips = (selected: string | undefined, onPick: (id: string) => void, exclude?: string) => (
+    <div className="chips">
+      {accounts
+        .filter((a) => a.id !== exclude)
+        .map((a) => (
+          <button key={a.id} className={`chip${selected === a.id ? ' selected' : ''}`} onClick={() => onPick(a.id)}>
+            {a.name}
+          </button>
+        ))}
+    </div>
+  );
+
+  return (
+    <Sheet
+      title={initial.id ? '編輯轉帳' : '帳戶之間轉帳'}
+      onClose={onClose}
+      actions={
+        <>
+          {initial.id ? (
+            <button className="btn danger-ghost" onClick={remove}>
+              刪除
+            </button>
+          ) : (
+            <button className="btn ghost" onClick={onClose}>
+              取消
+            </button>
+          )}
+          <button className="btn primary" onClick={save}>
+            儲存
+          </button>
+        </>
+      }
+    >
+      <div className="field">
+        <span>從（轉出）</span>
+        {chips(fromId, setFromId)}
+      </div>
+      <div className="field">
+        <span>到（轉入）</span>
+        {chips(toId, setToId, fromId)}
+      </div>
+      <label className="field">
+        <span>轉出金額（{currencyInfo(fromCur).name}）</span>
+        <input type="number" inputMode="decimal" className="amount-input" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0" autoFocus={!initial.id} />
+      </label>
+      {cross && (
+        <label className="field">
+          <span>實際入帳（{currencyInfo(toCur).name}）</span>
+          <input type="number" inputMode="decimal" value={toAmount} onChange={(e) => setToAmount(e.target.value)} placeholder={estimate !== undefined ? `約 ${estimate}` : '請輸入'} />
+          <small className="muted">不填的話用目前匯率估算</small>
+        </label>
+      )}
+      <div className="two-col">
+        <label className="field">
+          <span>手續費（選填）</span>
+          <input type="number" inputMode="decimal" value={fee} onChange={(e) => setFee(e.target.value)} placeholder="0" />
+        </label>
+        <label className="field">
+          <span>日期</span>
+          <input type="date" value={date} onChange={(e) => e.target.value && setDate(e.target.value)} />
+        </label>
+      </div>
+      <label className="field">
+        <span>備註（選填）</span>
+        <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="例如：入金準備買股票" />
+      </label>
+      {from && to && numOrUndef(amount) ? (
+        <p className="muted small">
+          {from.name} −{fmtMoney((numOrUndef(amount) ?? 0) + (numOrUndef(fee) ?? 0), fromCur)}，{to.name} +
+          {fmtMoney(cross ? (numOrUndef(toAmount) ?? estimate ?? 0) : (numOrUndef(amount) ?? 0), toCur)}
+        </p>
+      ) : null}
+      {error && <div className="error">{error}</div>}
     </Sheet>
   );
 }

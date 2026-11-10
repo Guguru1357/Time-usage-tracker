@@ -4,7 +4,7 @@ import { Share } from '@capacitor/share';
 import { db, normalizeAccountKind, type Account, type Activity, type Category, type Entry, type Habit, type HabitLog, type Plan, type Settings, type StudyDetails } from './db';
 
 /** 錢包的資料表；備份與還原時一起處理 */
-const WALLET_TABLES = ['expenseCats', 'expenses', 'quickItems', 'subscriptions', 'giftCards', 'accounts', 'balances', 'incomes', 'trades'] as const;
+const WALLET_TABLES = ['expenseCats', 'expenses', 'quickItems', 'subscriptions', 'giftCards', 'accounts', 'balances', 'incomes', 'trades', 'transfers'] as const;
 type WalletTable = (typeof WALLET_TABLES)[number];
 import { DEFAULT_SETTINGS } from './defaults';
 import { MIN, fmtHM, toDateKey } from './time';

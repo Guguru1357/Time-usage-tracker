@@ -5,7 +5,7 @@ import { db, normalizeAccountKind, type Subscription, type Trade } from '../src/
 import { ensureSeeded } from '../src/defaults';
 import { salaryReminderTimes, tradeReminderTimes } from '../src/notifications';
 import { HOUR, MIN, dayStart } from '../src/time';
-import { addIncome, balancesAt, fmtMoney, holdingsCost, rateOf, saveAccount, setBalance, totalAt } from '../src/wallet/assets';
+import { addIncome, balancesAt, deleteTransfer, fmtMoney, holdingsCost, rateOf, saveAccount, saveTransfer, setBalance, totalAt } from '../src/wallet/assets';
 import { importPwaBackup } from '../src/wallet/importPwa';
 import { addGiftLog, giftBalance, giftCount, monthlyTWD, nextCharge } from '../src/wallet/money';
 import { deleteExpense, saveExpense } from '../src/wallet/expenses';
@@ -150,6 +150,35 @@ describe('stock ↔ broker account sync', () => {
     expect(normalizeAccountKind('post')).toBe('deposit');
     expect(normalizeAccountKind('bank', 'USD')).toBe('foreign');
     expect(normalizeAccountKind('broker')).toBe('broker');
+  });
+});
+
+describe('transfers', () => {
+  it('moves money between accounts, and reverts on edit and delete', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_800_000_000_000);
+    const salary = await saveAccount({ name: '合庫薪轉戶', kind: 'deposit' });
+    const broker = await saveAccount({ name: '元大交割戶', kind: 'broker' });
+    const usd = await saveAccount({ name: '美元帳戶', kind: 'foreign', currency: 'USD' });
+    await setBalance(salary, 300_000, '2026-11-01');
+    await setBalance(broker, 5_000, '2026-11-01');
+    await setBalance(usd, 100, '2026-11-01');
+    const bal = async (id: string) => balancesAt(await db.balances.toArray()).get(id)!.amount;
+
+    const t = await saveTransfer({ date: '2026-11-10', fromId: salary, toId: broker, amount: 100_000, toAmount: 100_000 });
+    expect([await bal(salary), await bal(broker)]).toEqual([200_000, 105_000]);
+
+    // 改金額、加手續費
+    await saveTransfer({ ...t, amount: 80_000, toAmount: 80_000, fee: 15 });
+    expect([await bal(salary), await bal(broker)]).toEqual([219_985, 85_000]);
+
+    // 換成美元帳戶（不同幣別）
+    await saveTransfer({ ...t, toId: usd, amount: 32_000, toAmount: 1000, fee: undefined });
+    expect([await bal(salary), await bal(broker), await bal(usd)]).toEqual([268_000, 5_000, 1100]);
+
+    await deleteTransfer(t.id);
+    expect([await bal(salary), await bal(broker), await bal(usd)]).toEqual([300_000, 5_000, 100]);
+    await expect(saveTransfer({ date: '2026-11-10', fromId: salary, toId: salary, amount: 1, toAmount: 1 })).rejects.toThrow('同一個帳戶');
+    clock.mockRestore();
   });
 });
 

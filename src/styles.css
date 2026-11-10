@@ -2250,3 +2250,6 @@ h3 {
   align-self: flex-start;
   padding-left: 0;
 }
+.transfer-btn {
+  margin: 0 0 10px;
+}
