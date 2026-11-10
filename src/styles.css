@@ -2231,3 +2231,22 @@ h3 {
   color: var(--text-2);
   font-variant-numeric: tabular-nums;
 }
+.add-pay {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.add-pay input {
+  flex: 1;
+  min-width: 0;
+  height: 40px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  padding: 0 10px;
+  font: inherit;
+}
+.text-btn.left {
+  align-self: flex-start;
+  padding-left: 0;
+}

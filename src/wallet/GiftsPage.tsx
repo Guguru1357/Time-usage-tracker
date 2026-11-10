@@ -7,6 +7,11 @@ import { Sheet, numOrUndef, useToast } from './ui';
 
 const KIND_LABEL = { init: '建立', use: '使用', add: '加值', set: '調整' };
 
+/** 不足一張的零頭（例如用禮券付了 85 元，剩 15 元） */
+function remainder(g: GiftCard): number {
+  return round2(giftBalance(g) - giftCount(g) * (g.denom ?? 0));
+}
+
 export function GiftsPage() {
   const cards = useLiveQuery(() => db.giftCards.toArray()) ?? [];
   const [editing, setEditing] = useState<Partial<GiftCard> | null>(null);
@@ -29,7 +34,7 @@ export function GiftsPage() {
     const bal = giftBalance(g);
     const days = giftDaysLeft(g, today);
     const sub = [
-      isCountable(g) ? `${fmtNum(g.denom!)} 元 × ${giftCount(g)} 張` : '',
+      isCountable(g) ? `${fmtNum(g.denom!)} 元 × ${giftCount(g)} 張${remainder(g) ? `＋餘額 ${fmtNum(remainder(g))}` : ''}` : '',
       g.expiry ? `${g.expiry.replaceAll('-', '/')} 到期` : '',
       g.place ? `放在${g.place}` : '',
     ]

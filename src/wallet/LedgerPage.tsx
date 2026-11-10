@@ -8,17 +8,30 @@ import {
   DEFAULT_USD_RATE,
   MEALS,
   chargeTWD,
-  deleteExpense,
   fmtNum,
   fmtTWD,
   guessMeal,
   monthRange,
   nextCharge,
   quickId,
-  saveExpense,
   sortQuickItems,
 } from './money';
+import { CASH, addPayMethod, deleteExpense, payLabel, payOptions, removePayMethod, saveExpense } from './expenses';
 import { BarChart, HBarList, MonthNav, Sheet, numOrUndef, useToast } from './ui';
+
+/** 付款方式的顯示名稱：帳戶、禮券（含已刪除的）、信用卡／電子支付 */
+function usePayNames(): Map<string, string> {
+  return (
+    useLiveQuery(async () => {
+      const [accounts, gifts, settings] = await Promise.all([db.accounts.toArray(), db.giftCards.toArray(), db.settings.get('main')]);
+      const m = new Map<string, string>();
+      for (const a of accounts) m.set(`acct:${a.id}`, a.name);
+      for (const g of gifts) m.set(`gift:${g.id}`, `${g.emoji} ${g.name}`);
+      for (const p of settings?.payMethods ?? []) m.set(`pay:${p.id}`, p.name);
+      return m;
+    }) ?? new Map()
+  );
+}
 
 const OTHER: ExpenseCat = { id: 'other', name: '其他', emoji: '📦', color: '#9a96b3', order: 99 };
 
@@ -28,6 +41,7 @@ export function LedgerPage() {
   const [filter, setFilter] = useState('all');
   const [editing, setEditing] = useState<Partial<Expense> | null>(null);
   const [, say, toast] = useToast();
+  const payNames = usePayNames();
   const { from, to } = monthRange(month);
   const cats = useLiveQuery(() => db.expenseCats.orderBy('order').toArray()) ?? [];
   const list = useLiveQuery(() => db.expenses.where('date').between(from, to, true, true).toArray(), [from, to]) ?? [];
@@ -95,6 +109,7 @@ export function LedgerPage() {
                           <span className="money-sub">
                             {c.name}
                             {e.meal ? `・${MEALS[e.meal]}` : ''}
+                            {e.payWith ? ` · ${payLabel(e.payWith, payNames)}` : ''}
                             {e.note ? ` · ${e.note}` : ''}
                           </span>
                         </span>
@@ -108,7 +123,7 @@ export function LedgerPage() {
           )}
         </>
       ) : (
-        <LedgerStats month={month} list={list} cats={cats} />
+        <LedgerStats month={month} list={list} cats={cats} payNames={payNames} />
       )}
 
       <button className="fab" onClick={() => setEditing({})} aria-label="記一筆">
@@ -120,7 +135,7 @@ export function LedgerPage() {
   );
 }
 
-function LedgerStats({ month, list, cats }: { month: string; list: Expense[]; cats: ExpenseCat[] }) {
+function LedgerStats({ month, list, cats, payNames }: { month: string; list: Expense[]; cats: ExpenseCat[]; payNames: Map<string, string> }) {
   const settings = useSettings();
   const [withSubs, setWithSubs] = useState(true);
   const subs = useLiveQuery(() => db.subscriptions.toArray()) ?? [];
@@ -180,6 +195,15 @@ function LedgerStats({ month, list, cats }: { month: string; list: Expense[]; ca
       </div>
       <h3>分類</h3>
       <HBarList rows={catRows.map((r) => ({ ...r, sub: total ? `${Math.round((r.value / total) * 100)}%` : '' }))} format={fmtTWD} />
+      <h3>付款方式</h3>
+      <HBarList
+        rows={[...list
+          .reduce((m, e) => m.set(e.payWith ?? '', (m.get(e.payWith ?? '') ?? 0) + e.amount), new Map<string, number>())
+          .entries()]
+          .map(([k, v]) => ({ key: k || 'none', label: k ? payLabel(k, payNames) : '未標記', value: v }))
+          .sort((a, b) => b.value - a.value)}
+        format={fmtTWD}
+      />
       <h3>餐飲：正餐 vs 點心</h3>
       {food.length === 0 ? (
         <p className="muted">這個月沒有餐飲紀錄</p>
@@ -233,6 +257,20 @@ export function ExpenseSheet({ initial, cats, onClose, onSaved }: { initial: Par
   const [manage, setManage] = useState(false);
   const [autoFilled, setAutoFilled] = useState<string | null>(null);
   const [error, setError] = useState('');
+  const settings = useSettings();
+  const [payWith, setPayWith] = useState<string | undefined>(initial.id ? initial.payWith : undefined);
+  const [adding, setAdding] = useState(false);
+  const [newPay, setNewPay] = useState('');
+  const options = useLiveQuery(() => payOptions()) ?? [];
+  const payNames = usePayNames();
+  // 新的一筆預設用上次的付款方式（還存在的話），否則現金
+  const chosen = payWith ?? (options.some((o) => o.value === settings.lastPayWith) ? settings.lastPayWith : CASH);
+  // 編輯時，原本的付款方式即使已經不在清單（例如禮券用完）也要顯示
+  const shownOptions =
+    chosen && !options.some((o) => o.value === chosen)
+      ? [...options, { value: chosen, label: payLabel(chosen, payNames), deducts: false }]
+      : options;
+  const chosenOpt = shownOptions.find((o) => o.value === chosen);
   const m = cat === 'food' ? meal : undefined;
   const quick = sortQuickItems(useLiveQuery(() => db.quickItems.where('cat').equals(cat).toArray(), [cat]) ?? []).filter((q) => q.meal === m);
 
@@ -247,13 +285,13 @@ export function ExpenseSheet({ initial, cats, onClose, onSaved }: { initial: Par
   async function save() {
     const v = numOrUndef(amount);
     if (!v || v <= 0) return setError('請輸入金額');
-    await saveExpense({ id: initial.id, date, amount: v, cat, meal: m, item, note });
-    onSaved(`已記錄 ${fmtTWD(v)}`);
+    await saveExpense({ id: initial.id, date, amount: v, cat, meal: m, item, note, payWith: chosen });
+    onSaved(`已記錄 ${fmtTWD(v)}${chosenOpt?.deducts ? `，已從${chosenOpt.label}扣款` : ''}`);
     onClose();
   }
 
   async function remove() {
-    if (!initial.id || !confirm('刪除這筆支出？')) return;
+    if (!initial.id || !confirm(`刪除這筆支出？${initial.deducted ? '\n扣掉的帳戶或禮券餘額會還原。' : ''}`)) return;
     await deleteExpense(initial.id);
     onClose();
   }
@@ -340,6 +378,51 @@ export function ExpenseSheet({ initial, cats, onClose, onSaved }: { initial: Par
         <input type="date" value={date} onChange={(e) => e.target.value && setDate(e.target.value)} />
         <small className="muted">{fmtDateLabel(date)}</small>
       </label>
+      <div className="field">
+        <span>付款方式</span>
+        <div className="chips">
+          {shownOptions.map((o) => (
+            <button key={o.value} className={`chip${chosen === o.value ? ' selected' : ''}`} onClick={() => setPayWith(o.value)}>
+              {o.label}
+            </button>
+          ))}
+          <button className="chip" onClick={() => setAdding(!adding)}>
+            ＋ 信用卡／支付
+          </button>
+        </div>
+        {adding && (
+          <div className="add-pay">
+            <input value={newPay} onChange={(e) => setNewPay(e.target.value)} placeholder="例如：國泰 CUBE 卡、LINE Pay" autoFocus />
+            {(['card', 'epay'] as const).map((k) => (
+              <button
+                key={k}
+                className="btn sm"
+                disabled={!newPay.trim()}
+                onClick={async () => {
+                  setPayWith(await addPayMethod(newPay, k));
+                  setNewPay('');
+                  setAdding(false);
+                }}
+              >
+                {k === 'card' ? '信用卡' : '電子支付'}
+              </button>
+            ))}
+          </div>
+        )}
+        {chosenOpt && <small className="muted">{chosenOpt.deducts ? `儲存後會${chosenOpt.hint}` : chosen === CASH ? '只標記，不扣任何餘額' : `${chosenOpt.hint ?? ''}：只標記，不扣餘額`}</small>}
+        {chosen?.startsWith('pay:') && (
+          <button
+            className="text-btn left"
+            onClick={async () => {
+              if (!confirm(`從清單移除「${chosenOpt?.label}」？之前用它記的支出會顯示「（已刪除）」。`)) return;
+              await removePayMethod(chosen.slice(4));
+              setPayWith(CASH);
+            }}
+          >
+            從清單移除這個付款方式
+          </button>
+        )}
+      </div>
       <label className="field">
         <span>備註（選填）</span>
         <input value={note} onChange={(e) => setNote(e.target.value)} />

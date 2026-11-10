@@ -7,7 +7,8 @@ import { salaryReminderTimes, tradeReminderTimes } from '../src/notifications';
 import { HOUR, MIN, dayStart } from '../src/time';
 import { addIncome, balancesAt, fmtMoney, holdingsCost, rateOf, saveAccount, setBalance, totalAt } from '../src/wallet/assets';
 import { importPwaBackup } from '../src/wallet/importPwa';
-import { addGiftLog, giftCount, monthlyTWD, nextCharge, saveExpense } from '../src/wallet/money';
+import { addGiftLog, giftBalance, giftCount, monthlyTWD, nextCharge } from '../src/wallet/money';
+import { deleteExpense, saveExpense } from '../src/wallet/expenses';
 import { analyzePositions, dailyCounts, deleteTrade, saveTrade, tradeReport, weeklyCounts } from '../src/wallet/stocks';
 
 beforeEach(async () => {
@@ -153,6 +154,30 @@ describe('stock ↔ broker account sync', () => {
 });
 
 describe('money', () => {
+  it('deducts from the chosen account or voucher, and reverts on edit and delete', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_800_000_000_000);
+    const post = await saveAccount({ name: '郵局', kind: 'deposit' });
+    await setBalance(post, 10_000, '2026-11-01');
+    const bal = async () => balancesAt(await db.balances.toArray()).get(post)!.amount;
+    const e = await saveExpense({ date: '2026-11-09', amount: 300, cat: 'shopping', item: '書', payWith: `acct:${post}` });
+    expect(await bal()).toBe(9_700);
+    await saveExpense({ ...e, amount: 350 });
+    expect(await bal()).toBe(9_650);
+
+    await db.giftCards.add({ id: 'g7', name: '7-11', emoji: '🏪', unit: 'money', denom: 100, created: 0, log: [{ id: 'i', date: '2026-11-01', amount: 1000, kind: 'init' }] });
+    await saveExpense({ ...e, amount: 200, payWith: 'gift:g7' });
+    expect(await bal()).toBe(10_000);
+    expect(giftBalance((await db.giftCards.get('g7'))!)).toBe(800);
+
+    await saveExpense({ ...e, amount: 200, payWith: 'cash' });
+    expect(giftBalance((await db.giftCards.get('g7'))!)).toBe(1000);
+    await saveExpense({ ...e, amount: 120, payWith: `acct:${post}` });
+    await deleteExpense(e.id);
+    expect(await bal()).toBe(10_000);
+    expect((await db.settings.get('main'))?.lastPayWith).toBe(`acct:${post}`);
+    clock.mockRestore();
+  });
+
   it('remembers items and their last price', async () => {
     await saveExpense({ date: '2026-11-09', amount: 110, cat: 'food', meal: 'meal', item: '排骨便當' });
     await saveExpense({ date: '2026-11-10', amount: 120, cat: 'food', meal: 'meal', item: '排骨便當' });

@@ -1,4 +1,4 @@
-import { db, uid, type Expense, type GiftCard, type Meal, type QuickItem, type Subscription } from '../db';
+import { db, uid, type GiftCard, type Meal, type QuickItem, type Subscription } from '../db';
 import { addDays, dayStart, toDateKey } from '../time';
 
 export const DEFAULT_USD_RATE = 32;
@@ -45,42 +45,6 @@ export function guessMeal(hour = new Date().getHours()): Meal {
 
 export function quickId(cat: string, meal: Meal | undefined, item: string): string {
   return `${cat}|${meal ?? ''}|${item}`;
-}
-
-export async function saveExpense(data: Omit<Expense, 'id' | 'createdAt'> & { id?: string }): Promise<Expense> {
-  const existing = data.id ? await db.expenses.get(data.id) : undefined;
-  const e: Expense = {
-    ...data,
-    id: data.id ?? uid(),
-    amount: round2(data.amount),
-    meal: data.cat === 'food' ? (data.meal ?? 'meal') : undefined,
-    item: data.item.trim(),
-    note: data.note?.trim() || undefined,
-    createdAt: existing?.createdAt ?? Date.now(),
-  };
-  await db.transaction('rw', db.expenses, db.quickItems, async () => {
-    await db.expenses.put(e);
-    // 記住品項與這次的金額
-    if (e.item) {
-      const id = quickId(e.cat, e.meal, e.item);
-      const q = await db.quickItems.get(id);
-      const changed = !existing || existing.item !== e.item || existing.cat !== e.cat || existing.meal !== e.meal;
-      await db.quickItems.put({
-        id,
-        cat: e.cat,
-        meal: e.meal,
-        item: e.item,
-        amount: e.amount,
-        count: (q?.count ?? 0) + (changed ? 1 : 0) || 1,
-        last: Date.now(),
-      });
-    }
-  });
-  return e;
-}
-
-export async function deleteExpense(id: string): Promise<void> {
-  await db.expenses.delete(id);
 }
 
 export function sortQuickItems(list: QuickItem[]): QuickItem[] {

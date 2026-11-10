@@ -171,7 +171,18 @@ export interface Expense {
   meal?: Meal;
   item: string;
   note?: string;
+  /** 付款方式：'cash'、'acct:帳戶id'、'gift:禮券id'、'pay:付款方式id' */
+  payWith?: string;
+  /** 已經從帳戶或禮券扣掉的紀錄，編輯或刪除時用來還原 */
+  deducted?: { kind: 'acct' | 'gift'; id: string; amount: number; logId?: string };
   createdAt: number;
+}
+
+/** 使用者自訂的信用卡、電子支付（只標記，不扣餘額） */
+export interface PayMethod {
+  id: string;
+  name: string;
+  kind: 'card' | 'epay';
 }
 
 /** 記過的品項，下次一鍵帶入；id = `${cat}|${meal}|${item}` */
@@ -305,6 +316,10 @@ export interface Settings {
   fxRates?: Record<string, number>;
   /** 匯率最後更新日期 */
   fxUpdated?: string;
+  /** 信用卡、電子支付 */
+  payMethods?: PayMethod[];
+  /** 上次記帳用的付款方式 */
+  lastPayWith?: string;
   /** 每月幾號提醒輸入薪資；0 或未設定為關閉，預設 7 */
   salaryDay?: number;
   /** 開盤日提醒記錄股票進出的時間；空字串為關閉，預設 14:00 */
