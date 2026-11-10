@@ -187,6 +187,8 @@ export interface PayMethod {
   id: string;
   name: string;
   kind: 'card' | 'epay';
+  /** 信用卡：卡費從哪個帳戶扣（帳戶 id） */
+  payFrom?: string;
 }
 
 /** 記過的品項，下次一鍵帶入；id = `${cat}|${meal}|${item}` */
@@ -212,10 +214,31 @@ export interface Subscription {
   billingDay?: number;
   /** 1–12，年繳才用 */
   billingMonth?: number;
+  /** 舊版的付款方式文字備註 */
   payment?: string;
+  /** 扣款方式：'pay:信用卡id'（卡費帳戶扣）或 'acct:帳戶id'（直接扣）；未設定則不自動扣款 */
+  payWith?: string;
+  /** 從這天（含）起到了扣款日自動扣款，避免回頭補扣設定前的月份 */
+  autoFrom?: string;
   category: 'video' | 'tool' | 'shopping' | 'other';
   status: SubStatus;
   lastReviewed?: string;
+}
+
+/** 訂閱自動扣款的紀錄，一個扣款日一筆；撤銷時把錢加回帳戶 */
+export interface SubCharge {
+  id: string;
+  subId: string;
+  /** 扣款日 YYYY-MM-DD */
+  date: string;
+  /** 扣掉的台幣金額 */
+  amount: number;
+  accountId: string;
+  /** 當時的扣款方式（信用卡或帳戶） */
+  payWith: string;
+  /** 已撤銷：錢已加回帳戶，這天也不會再扣 */
+  undone?: boolean;
+  createdAt: number;
 }
 
 export interface GiftLog {
@@ -381,6 +404,7 @@ export class TimeLedgerDB extends Dexie {
   incomes!: EntityTable<Income, 'id'>;
   trades!: EntityTable<Trade, 'id'>;
   transfers!: EntityTable<Transfer, 'id'>;
+  subCharges!: EntityTable<SubCharge, 'id'>;
 
   constructor(name = 'time-ledger') {
     super(name);
@@ -429,6 +453,8 @@ export class TimeLedgerDB extends Dexie {
       });
     // v6：帳戶之間轉帳
     this.version(6).stores({ transfers: 'id, date' });
+    // v7：訂閱自動扣款紀錄
+    this.version(7).stores({ subCharges: 'id, subId, date' });
     // v5：帳戶分成綜合存款／證券／外幣
     this.version(5).upgrade((tx) =>
       tx

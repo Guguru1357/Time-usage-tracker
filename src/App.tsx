@@ -6,6 +6,8 @@ import { isNative, onNotificationTap, rescheduleReminders } from './notification
 import { applyTheme } from './theme';
 import { UpdateSheet } from './components/UpdateSheet';
 import { autoCheck, type UpdateInfo } from './updater';
+import { fmtTWD } from './wallet/money';
+import { processSubCharges } from './wallet/subCharges';
 import { todayKey } from './time';
 import { DayView } from './views/DayView';
 import { HomeView } from './views/HomeView';
@@ -30,6 +32,7 @@ export function App() {
   const [stack, setStack] = useState<Route[]>([{ name: 'home' }]);
   const route = stack[stack.length - 1];
   const theme = useSettings().theme;
+  const [charged, setCharged] = useState('');
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
   const [updateOpen, setUpdateOpen] = useState(false);
   const [updateDismissed, setUpdateDismissed] = useState(false);
@@ -44,7 +47,13 @@ export function App() {
 
   useEffect(() => {
     void rescheduleReminders();
-    const check = () => void autoCheck().then((u) => u && setUpdate(u));
+    const check = () => {
+      void autoCheck().then((u) => u && setUpdate(u));
+      // 到了扣款日的訂閱自動扣款
+      void processSubCharges().then((made) => {
+        if (made.length) setCharged(`已自動扣款：${made.map((c) => `${c.name} ${fmtTWD(c.amount)}`).join('、')}`);
+      });
+    };
     check();
     onNotificationTap({
       review: (t) => setStack([{ name: 'home' }, { name: 'day', date: t.date }, { name: 'review', date: t.date, reminderId: t.reminderId }]),
@@ -71,6 +80,14 @@ export function App() {
   return (
     <div className="app">
       <main>
+        {charged && (
+          <div className="update-banner">
+            <span>{charged}</span>
+            <button className="text-btn" onClick={() => setCharged('')}>
+              知道了
+            </button>
+          </div>
+        )}
         {update && !updateDismissed && (
           <div className="update-banner">
             <span>有新版本 #{update.build}</span>

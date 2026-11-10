@@ -1,11 +1,30 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useEffect, useState } from 'react';
-import { db, uid, type Subscription } from '../db';
+import { db, uid, type SubCharge, type Subscription } from '../db';
 import { useSettings } from '../hooks';
 import { updateSettings } from '../repo';
 import { addDays, dayStart, fmtDateLabel, todayKey } from '../time';
 import { DEFAULT_USD_RATE, SUB_CATEGORIES, SUB_STATUS, chargeTWD, ensureDefaultSubs, fmtTWD, monthlyTWD, needsSetup, nextCharge } from './money';
 import { Sheet, numOrUndef, useToast } from './ui';
+import { addPayMethod } from './expenses';
+import { cardsOf, chargeAccountId, chargeableAccounts, processSubCharges, setCardPayFrom, undoSubCharge } from './subCharges';
+
+/** 扣款方式的顯示文字，例如「CUBE 卡 → 國泰」 */
+function usePayText(): (s: Pick<Subscription, 'payWith' | 'payment'>) => string {
+  const settings = useSettings();
+  const accounts = useLiveQuery(() => db.accounts.toArray()) ?? [];
+  const name = (id?: string) => accounts.find((a) => a.id === id)?.name;
+  return (s) => {
+    const [kind, id] = (s.payWith ?? '').split(':');
+    if (kind === 'acct') return name(id) ?? '（已刪除的帳戶）';
+    if (kind === 'pay') {
+      const card = settings.payMethods?.find((m) => m.id === id);
+      if (!card) return '（已刪除的卡）';
+      return card.payFrom ? `${card.name} → ${name(card.payFrom) ?? '?'}` : `${card.name}（未設定卡費帳戶）`;
+    }
+    return s.payment ?? '';
+  };
+}
 
 export function SubsPage() {
   const settings = useSettings();
@@ -14,7 +33,13 @@ export function SubsPage() {
   const [editing, setEditing] = useState<Partial<Subscription> | null>(null);
   const [review, setReview] = useState<{ queue: string[]; idx: number } | null>(null);
   const [, say, toast] = useToast();
-  useEffect(() => void ensureDefaultSubs(), []);
+  const payText = usePayText();
+  useEffect(() => {
+    void ensureDefaultSubs();
+    void processSubCharges().then((made) => {
+      if (made.length) say(`已自動扣款：${made.map((c) => `${c.name} ${fmtTWD(c.amount)}`).join('、')}`);
+    });
+  }, []);
 
   const today = todayKey();
   const counted = subs.filter((s) => s.status !== 'cancelled');
@@ -102,7 +127,7 @@ export function SubsPage() {
                   <span className="money-title">{s.name}</span>
                   <span className="money-sub">
                     {fmtDateLabel(next!)} · {n === 0 ? '今天' : n === 1 ? '明天' : `${n} 天後`}
-                    {s.payment ? ` · ${s.payment}` : ''}
+                    {payText(s) ? ` · ${payText(s)}` : ''}
                   </span>
                 </span>
                 <span className="money-amt">{fmtTWD(chargeTWD(s, rate))}</span>
@@ -130,6 +155,7 @@ export function SubsPage() {
               <span className="money-sub">
                 {SUB_CATEGORIES[s.category]} · {s.cycle === 'yearly' ? '年繳' : '月繳'}
                 {next ? ` · 下次 ${fmtDateLabel(next)}` : ''}
+                {s.status !== 'cancelled' && s.payWith && chargeAccountId(s, settings) ? ' · 自動扣款' : ''}
               </span>
             </span>
             <span className="money-amt">
@@ -167,9 +193,27 @@ function SubSheet({ initial, rate, onClose, onSaved }: { initial: Partial<Subscr
   const [amount, setAmount] = useState(initial.amount ? String(initial.amount) : '');
   const set = (patch: Partial<Subscription>) => setS((x) => ({ ...x, ...patch }));
   const preview = { ...s, amount: numOrUndef(amount) ?? 0 } as Subscription;
+  const settings = useSettings();
+  const accounts = chargeableAccounts(useLiveQuery(() => db.accounts.orderBy('order').toArray()) ?? []);
+  const cards = cardsOf(settings);
+  const [kind, targetId] = (s.payWith ?? '').split(':');
+  const card = kind === 'pay' ? cards.find((c) => c.id === targetId) : undefined;
+  // 卡費帳戶屬於卡片；在這裡改會套用到用這張卡的所有訂閱
+  const [cardPayFrom, setCardPayFromState] = useState<Record<string, string | undefined>>({});
+  const billAccount = card ? (card.id in cardPayFrom ? cardPayFrom[card.id] : card.payFrom) : undefined;
+  const willCharge = kind === 'acct' ? !!targetId : !!billAccount;
+  const [addingCard, setAddingCard] = useState(false);
+  const [newCard, setNewCard] = useState('');
+  const charges =
+    useLiveQuery(async (): Promise<SubCharge[]> => (s.id ? db.subCharges.where('subId').equals(s.id).reverse().sortBy('date') : []), [s.id]) ?? [];
+  const accountName = (id?: string) => accounts.find((a) => a.id === id)?.name ?? '（已刪除）';
+  const today = todayKey();
 
   async function save() {
     if (!s.name?.trim()) return;
+    for (const [cardId, acct] of Object.entries(cardPayFrom)) await setCardPayFrom(cardId, acct);
+    // 第一次設定扣款方式時，從今天開始自動扣款；不回頭補扣以前的月份
+    const autoFrom = s.payWith ? (initial.payWith && s.autoFrom ? s.autoFrom : today) : undefined;
     await db.subscriptions.put({
       id: s.id ?? uid(),
       name: s.name.trim(),
@@ -179,11 +223,14 @@ function SubSheet({ initial, rate, onClose, onSaved }: { initial: Partial<Subscr
       billingDay: s.billingDay,
       billingMonth: s.cycle === 'yearly' ? s.billingMonth : undefined,
       payment: s.payment?.trim() || undefined,
+      payWith: s.payWith,
+      autoFrom,
       category: s.category!,
       status: s.status!,
       lastReviewed: s.lastReviewed,
     });
-    onSaved('已儲存');
+    const made = await processSubCharges();
+    onSaved(made.length ? `已儲存，並扣款：${made.map((c) => `${c.name} ${fmtTWD(c.amount)}`).join('、')}` : '已儲存');
     onClose();
   }
   async function remove() {
@@ -267,10 +314,81 @@ function SubSheet({ initial, rate, onClose, onSaved }: { initial: Partial<Subscr
           </select>
         </label>
       </div>
-      <label className="field">
-        <span>付款方式（選填）</span>
-        <input value={s.payment ?? ''} onChange={(e) => set({ payment: e.target.value })} placeholder="例如：國泰 *1234" />
-      </label>
+      <div className="field">
+        <span>扣款方式</span>
+        <div className="chips">
+          <button className={`chip${!s.payWith ? ' selected' : ''}`} onClick={() => set({ payWith: undefined })}>
+            不自動扣款
+          </button>
+          {cards.map((c) => (
+            <button key={c.id} className={`chip${s.payWith === `pay:${c.id}` ? ' selected' : ''}`} onClick={() => set({ payWith: `pay:${c.id}` })}>
+              💳 {c.name}
+            </button>
+          ))}
+          {accounts.map((a) => (
+            <button key={a.id} className={`chip${s.payWith === `acct:${a.id}` ? ' selected' : ''}`} onClick={() => set({ payWith: `acct:${a.id}` })}>
+              🏦 {a.name}
+            </button>
+          ))}
+          <button className="chip" onClick={() => setAddingCard(!addingCard)}>
+            ＋ 信用卡
+          </button>
+        </div>
+        {addingCard && (
+          <div className="add-pay">
+            <input value={newCard} onChange={(e) => setNewCard(e.target.value)} placeholder="例如：國泰 CUBE 卡" autoFocus />
+            <button
+              className="btn sm"
+              disabled={!newCard.trim()}
+              onClick={async () => {
+                set({ payWith: await addPayMethod(newCard, 'card') });
+                setNewCard('');
+                setAddingCard(false);
+              }}
+            >
+              加入
+            </button>
+          </div>
+        )}
+      </div>
+      {card && (
+        <div className="field">
+          <span>「{card.name}」的卡費從哪個帳戶扣</span>
+          {accounts.length === 0 ? (
+            <small className="muted">還沒有台幣存款帳戶，請先到「資產」新增</small>
+          ) : (
+            <div className="chips">
+              {accounts.map((a) => (
+                <button
+                  key={a.id}
+                  className={`chip${billAccount === a.id ? ' selected' : ''}`}
+                  onClick={() => setCardPayFromState((m) => ({ ...m, [card.id]: a.id }))}
+                >
+                  🏦 {a.name}
+                </button>
+              ))}
+            </div>
+          )}
+          <small className="muted">卡費帳戶是這張卡的設定，用這張卡的訂閱都會從同一個帳戶扣</small>
+        </div>
+      )}
+      {s.payWith && (
+        <p className={`small ${willCharge ? 'muted' : 'warn'}`}>
+          {!willCharge
+            ? '選好卡費帳戶後才會自動扣款'
+            : !s.billingDay || (s.cycle === 'yearly' && !s.billingMonth)
+              ? '設定扣款日後才會自動扣款'
+              : `每到扣款日自動從「${accountName(kind === 'acct' ? targetId : billAccount)}」扣 ${preview.amount ? fmtTWD(chargeTWD(preview, rate)) : '這筆金額'}${
+                  initial.payWith && s.autoFrom ? '' : '，從今天開始'
+                }`}
+        </p>
+      )}
+      {s.payment && !s.payWith && (
+        <label className="field">
+          <span>付款備註（舊資料）</span>
+          <input value={s.payment} onChange={(e) => set({ payment: e.target.value })} />
+        </label>
+      )}
       <div className="field">
         <span>分類</span>
         <div className="chips">
@@ -296,6 +414,35 @@ function SubSheet({ initial, rate, onClose, onSaved }: { initial: Partial<Subscr
           每月平均 {fmtTWD(monthlyTWD(preview, rate))}，每年 {fmtTWD(monthlyTWD(preview, rate) * 12)}
           {s.currency === 'USD' ? `（匯率 ${rate}）` : ''}
         </p>
+      )}
+      {charges.length > 0 && (
+        <>
+          <h3>扣款紀錄</h3>
+          <div className="money-list">
+            {charges.slice(0, 12).map((c) => (
+              <div key={c.id} className={`money-row static${c.undone ? ' faded' : ''}`}>
+                <span className="money-main">
+                  <span className="money-title">{fmtDateLabel(c.date)}</span>
+                  <span className="money-sub">
+                    {accountName(c.accountId)}
+                    {c.undone ? ' · 已撤銷' : ''}
+                  </span>
+                </span>
+                <span className="money-amt">{fmtTWD(c.amount)}</span>
+                {!c.undone && (
+                  <button
+                    className="text-btn"
+                    onClick={async () => {
+                      if (confirm(`撤銷 ${fmtDateLabel(c.date)} 的扣款？${fmtTWD(c.amount)} 會加回「${accountName(c.accountId)}」。`)) await undoSubCharge(c.id);
+                    }}
+                  >
+                    撤銷
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </>
       )}
     </Sheet>
   );
