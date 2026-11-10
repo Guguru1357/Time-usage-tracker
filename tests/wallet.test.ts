@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildBackup, restoreBackup } from '../src/backup';
 import { db, normalizeAccountKind, type Subscription, type Trade } from '../src/db';
 import { ensureSeeded } from '../src/defaults';
@@ -116,6 +116,8 @@ describe('assets', () => {
 
 describe('stock ↔ broker account sync', () => {
   it('moves cash on buy/sell, and reverts on edit and delete', async () => {
+    // 固定時間：模擬同一毫秒內連續寫入多筆餘額（CI 上曾因此算錯）
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_800_000_000_000);
     const broker = await saveAccount({ name: '元大交割戶', kind: 'broker' });
     await setBalance(broker, 200_000, '2026-11-01');
     const bal = async () => balancesAt(await db.balances.toArray()).get(broker)!.amount;
@@ -134,6 +136,7 @@ describe('stock ↔ broker account sync', () => {
     expect(await bal()).toBe(200_000 - 110_142);
     await deleteTrade(buy.id);
     expect(await bal()).toBe(200_000);
+    clock.mockRestore();
   });
 
   it('counts stock holdings at cost', () => {

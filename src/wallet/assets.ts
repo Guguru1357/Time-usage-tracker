@@ -80,16 +80,28 @@ export function holdingsCost(trades: Trade[], date?: string): number {
   return round2([...pos.values()].reduce((a, p) => a + (p.shares > 0 ? p.cost : 0), 0));
 }
 
+/**
+ * 新餘額紀錄的建立時間：一定比這個帳戶最新的一筆晚。
+ * 同一毫秒內連續寫入（例如編輯交易時先還原再扣款）也能分出先後。
+ */
+function nextStamp(latest: Balance | undefined): number {
+  return Math.max(Date.now(), (latest?.createdAt ?? 0) + 1);
+}
+
+async function latestOf(accountId: string): Promise<Balance | undefined> {
+  return balancesAt(await db.balances.where('accountId').equals(accountId).toArray()).get(accountId);
+}
+
 /** 調整帳戶餘額：在最新一筆餘額上加減，日期不早於最新那筆 */
 export async function adjustBalance(accountId: string, delta: number, date: string): Promise<void> {
   if (!delta) return;
-  const cur = balancesAt(await db.balances.where('accountId').equals(accountId).toArray()).get(accountId);
+  const cur = await latestOf(accountId);
   await db.balances.add({
     id: uid(),
     accountId,
     amount: round2((cur?.amount ?? 0) + delta),
     date: cur && cur.date > date ? cur.date : date,
-    createdAt: Date.now(),
+    createdAt: nextStamp(cur),
   });
 }
 
@@ -149,7 +161,7 @@ export async function saveAccount(a: Omit<Account, 'id' | 'order'> & { id?: stri
 }
 
 export async function setBalance(accountId: string, amount: number, date: string): Promise<void> {
-  await db.balances.add({ id: uid(), accountId, amount: round2(amount), date, createdAt: Date.now() });
+  await db.balances.add({ id: uid(), accountId, amount: round2(amount), date, createdAt: nextStamp(await latestOf(accountId)) });
 }
 
 /** 新增收入；指定帳戶時一併把金額加到該帳戶餘額 */
@@ -157,8 +169,8 @@ export async function addIncome(data: Omit<Income, 'id'>, addToAccount: boolean)
   await db.transaction('rw', db.incomes, db.balances, async () => {
     await db.incomes.add({ ...data, id: uid(), amount: round2(data.amount) });
     if (addToAccount && data.accountId) {
-      const cur = balancesAt(await db.balances.where('accountId').equals(data.accountId).toArray()).get(data.accountId);
-      await db.balances.add({ id: uid(), accountId: data.accountId, amount: round2((cur?.amount ?? 0) + data.amount), date: data.date, createdAt: Date.now() });
+      const cur = await latestOf(data.accountId);
+      await db.balances.add({ id: uid(), accountId: data.accountId, amount: round2((cur?.amount ?? 0) + data.amount), date: data.date, createdAt: nextStamp(cur) });
     }
   });
 }
