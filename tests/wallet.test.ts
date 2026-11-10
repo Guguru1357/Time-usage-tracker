@@ -8,7 +8,7 @@ import { HOUR, MIN, dayStart } from '../src/time';
 import { addIncome, fmtMoney, rateOf, saveAccount, setBalance, totalAt } from '../src/wallet/assets';
 import { importPwaBackup } from '../src/wallet/importPwa';
 import { addGiftLog, giftCount, monthlyTWD, nextCharge, saveExpense } from '../src/wallet/money';
-import { analyzePositions, tradeReport, weeklyCounts } from '../src/wallet/stocks';
+import { analyzePositions, dailyCounts, tradeReport, weeklyCounts } from '../src/wallet/stocks';
 
 beforeEach(async () => {
   await db.delete();
@@ -52,6 +52,15 @@ describe('stocks', () => {
     expect(r.emotions.get('calm')?.count).toBe(1);
     // 定期定額照樣算進持股
     expect(analyzePositions(list).holdings.find((h) => h.symbol === '0050')?.shares).toBe(15);
+  });
+
+  it('counts trades per day', () => {
+    const d = dailyCounts([trade({ date: '2026-11-09' }), trade({ date: '2026-11-09' }), trade({ date: '2026-11-07' })], '2026-11-09', 3);
+    expect(d).toEqual([
+      { date: '2026-11-07', count: 1 },
+      { date: '2026-11-08', count: 0 },
+      { date: '2026-11-09', count: 2 },
+    ]);
   });
 
   it('counts trades per week ending at the given date', () => {

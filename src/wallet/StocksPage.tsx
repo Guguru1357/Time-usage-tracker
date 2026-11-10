@@ -5,7 +5,7 @@ import { db, uid, type Emotion, type Trade } from '../db';
 import { rescheduleReminders } from '../notifications';
 import { addDays, fmtDateLabel, fmtHM, todayKey } from '../time';
 import { fmtNum, fmtTWD, round2 } from './money';
-import { EMOTIONS, EMOTION_ORDER, analyzePositions, markTradeDay, reportedTradeDays, sortTrades, tradeAmount, tradeReport, weeklyCounts } from './stocks';
+import { EMOTIONS, EMOTION_ORDER, analyzePositions, markTradeDay, reportedTradeDays, sortTrades, tradeAmount, tradeReport, dailyCounts, weeklyCounts } from './stocks';
 import { BarChart, HBarList, Sheet, numOrUndef, useToast } from './ui';
 
 const PERIOD_DAYS = 30;
@@ -19,6 +19,7 @@ export function StocksPage({ focus }: { focus?: { date: string; action?: 'noTrad
   const trades = useLiveQuery(() => db.trades.toArray()) ?? [];
   const reported = useLiveQuery(() => reportedTradeDays()) ?? new Set<string>();
   const [editing, setEditing] = useState<Partial<Trade> | null>(null);
+  const [countMode, setCountMode] = useState<'day' | 'week'>('day');
   const [, say, toast] = useToast();
   const today = todayKey();
 
@@ -39,6 +40,12 @@ export function StocksPage({ focus }: { focus?: { date: string; action?: 'noTrad
   const report = tradeReport(trades, from, today);
   const { holdings, realized } = analyzePositions(trades);
   // 12 週的日期標籤太擠，隔週顯示一次（最後一週一定顯示）
+  // 近 30 天每日筆數；日期標籤每 5 天顯示一次，最後一天一定顯示
+  const daily = dailyCounts(trades, today, PERIOD_DAYS).map((d, i) => ({
+    label: fmtDateLabel(d.date),
+    short: (PERIOD_DAYS - 1 - i) % 5 === 0 ? `${Number(d.date.slice(5, 7))}/${Number(d.date.slice(8))}` : '',
+    value: d.count,
+  }));
   const weekly = weeklyCounts(trades, today, 12).map((w, i) => ({
     label: `${fmtDateLabel(w.start)} 那週`,
     short: (11 - i) % 2 === 0 ? `${Number(w.start.slice(5, 7))}/${Number(w.start.slice(8))}` : '',
@@ -97,9 +104,19 @@ export function StocksPage({ focus }: { focus?: { date: string; action?: 'noTrad
         </div>
       </div>
 
-      <h3>每週交易筆數</h3>
+      <div className="section-head">
+        <h3>{countMode === 'day' ? '每日交易筆數（近 30 天）' : '每週交易筆數（近 12 週）'}</h3>
+        <div className="segmented mini">
+          <button className={countMode === 'day' ? 'active' : ''} onClick={() => setCountMode('day')}>
+            每日
+          </button>
+          <button className={countMode === 'week' ? 'active' : ''} onClick={() => setCountMode('week')}>
+            每週
+          </button>
+        </div>
+      </div>
       <div className="card chart-card">
-        <BarChart bars={weekly} format={(v) => `${v} 筆`} empty="還沒有交易紀錄" />
+        <BarChart key={countMode} bars={countMode === 'day' ? daily : weekly} format={(v) => `${v} 筆`} empty="還沒有交易紀錄" />
       </div>
 
       {report.manual > 0 && (

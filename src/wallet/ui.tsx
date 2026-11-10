@@ -73,7 +73,12 @@ export function BarChart({ bars, format, empty = '沒有資料' }: { bars: Bar[]
                 <rect x={x} y={H - h} width={bw} height={h} rx={Math.min(3, bw / 2)} className={`bar${shown === i ? ' on' : ''}`} />
               )}
               {b.short && (
-                <text x={x + bw / 2} y={H + 12} textAnchor="middle" className="axis">
+                <text
+                  x={x + bw / 2 > W - 16 ? W : x + bw / 2 < 16 ? 0 : x + bw / 2}
+                  y={H + 12}
+                  textAnchor={x + bw / 2 > W - 16 ? 'end' : x + bw / 2 < 16 ? 'start' : 'middle'}
+                  className="axis"
+                >
                   {b.short}
                 </text>
               )}

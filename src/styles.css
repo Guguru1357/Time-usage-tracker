@@ -2239,3 +2239,10 @@ h3 {
   font-size: 17px;
   text-align: center;
 }
+.segmented.mini {
+  margin: 0;
+}
+.segmented.mini button {
+  padding: 5px 12px;
+  font-size: 13px;
+}

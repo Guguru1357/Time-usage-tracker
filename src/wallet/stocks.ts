@@ -109,6 +109,16 @@ export function weeklyCounts(trades: Trade[], to: string, weeks: number): { star
   });
 }
 
+/** 每日交易筆數：到 to 為止的 days 天（含 to） */
+export function dailyCounts(trades: Trade[], to: string, days: number): { date: string; count: number }[] {
+  const perDay = new Map<string, number>();
+  for (const t of trades) perDay.set(t.date, (perDay.get(t.date) ?? 0) + 1);
+  return Array.from({ length: days }, (_, i) => {
+    const date = addDays(to, i - days + 1);
+    return { date, count: perDay.get(date) ?? 0 };
+  });
+}
+
 // ---------- 每日回報（沒交易／休市） ----------
 
 const NO_TRADE_KEY = 'trade:noTrade';
