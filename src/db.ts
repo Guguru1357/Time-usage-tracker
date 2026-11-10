@@ -270,9 +270,12 @@ export interface Trade {
   /** 股數（1 張 = 1000 股） */
   shares: number;
   fee?: number;
+  /** 當下心情；定期定額為自動扣款，固定記為平靜 */
   emotion: Emotion;
-  /** 是否照事先的計畫 */
-  planned: boolean;
+  /** 定期定額（自動扣款買進） */
+  dca?: boolean;
+  /** 舊版欄位：是否照計畫（已不再使用） */
+  planned?: boolean;
   reason?: string;
   createdAt: number;
 }

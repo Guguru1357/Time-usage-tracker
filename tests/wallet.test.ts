@@ -25,7 +25,6 @@ const trade = (t: Partial<Trade>): Trade => ({
   price: 100,
   shares: 1000,
   emotion: 'calm',
-  planned: true,
   createdAt: n,
   ...t,
 });
@@ -40,22 +39,19 @@ describe('stocks', () => {
     expect(holdings).toEqual([{ symbol: '2330', name: undefined, shares: 1000, avgCost: 110 }]);
   });
 
-  it('flags overtrading, revenge trades and unplanned trades', () => {
+  it('reports moods of manual trades only, and counts DCA separately', () => {
     const list = [
       trade({ date: '2026-11-02', price: 100 }),
-      trade({ date: '2026-11-03', side: 'sell', price: 90, emotion: 'fear', planned: false }),
-      trade({ date: '2026-11-03', price: 95, emotion: 'revenge', planned: false }),
-      trade({ date: '2026-11-03', symbol: '2317', emotion: 'fomo', planned: false }),
-      trade({ date: '2026-11-03', symbol: '2317', side: 'sell', emotion: 'impulse', planned: false, price: 101 }),
+      trade({ date: '2026-11-03', side: 'sell', price: 90, emotion: 'fear' }),
+      trade({ date: '2026-11-03', price: 95, emotion: 'revenge' }),
+      trade({ date: '2026-11-06', symbol: '0050', price: 190, shares: 15, dca: true }),
     ];
     const r = tradeReport(list, '2026-10-10', '2026-11-08');
-    expect(r.count).toBe(5);
-    expect(r.unplanned).toBe(4);
-    expect(r.emotions.get('fear')?.pnl).toBe(-10_000);
-    const text = r.warnings.map((w) => w.text).join('\n');
-    expect(text).toContain('單日交易 4 筆以上');
-    expect(text).toContain('賠錢賣出後一天內又買進');
-    expect(text).toContain('不在計畫內');
+    expect(r).toMatchObject({ count: 4, tradingDays: 3, dca: 1, manual: 3, emotional: 2 });
+    expect(r.emotions.get('fear')).toEqual({ count: 1, pnl: -10_000, sells: 1 });
+    expect(r.emotions.get('calm')?.count).toBe(1);
+    // 定期定額照樣算進持股
+    expect(analyzePositions(list).holdings.find((h) => h.symbol === '0050')?.shares).toBe(15);
   });
 
   it('counts trades per week ending at the given date', () => {

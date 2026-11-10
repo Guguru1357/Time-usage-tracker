@@ -86,39 +86,25 @@ export function StocksPage({ focus }: { focus?: { date: string; action?: 'noTrad
           <small>{report.tradingDays} 天</small>
         </div>
         <div>
-          <span>計畫外</span>
-          <b>{report.count ? Math.round((report.unplanned / report.count) * 100) : 0}%</b>
-          <small>{report.unplanned} 筆</small>
+          <span>定期定額</span>
+          <b>{report.dca} 筆</b>
+          <small>自動扣款</small>
         </div>
         <div>
           <span>帶情緒</span>
-          <b>{report.count ? Math.round((report.emotional / report.count) * 100) : 0}%</b>
-          <small>{report.emotional} 筆</small>
+          <b>{report.manual ? Math.round((report.emotional / report.manual) * 100) : 0}%</b>
+          <small>自己下單 {report.manual} 筆</small>
         </div>
       </div>
-
-      {report.count > 0 &&
-        (report.warnings.length ? (
-          <div className="warn-list">
-            {report.warnings.map((w) => (
-              <div key={w.text} className={`warn-item ${w.level}`}>
-                {w.level === 'high' ? '⚠ ' : '・'}
-                {w.text}
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="ok-box">✓ 沒有明顯的過度交易或情緒交易跡象</div>
-        ))}
 
       <h3>每週交易筆數</h3>
       <div className="card chart-card">
         <BarChart bars={weekly} format={(v) => `${v} 筆`} empty="還沒有交易紀錄" />
       </div>
 
-      {report.count > 0 && (
+      {report.manual > 0 && (
         <>
-          <h3>交易時的心情（筆數 · 已實現損益）</h3>
+          <h3>自己下單時的心情（筆數 · 已實現損益）</h3>
           <HBarList
             rows={EMOTION_ORDER.filter((e) => report.emotions.get(e)).map((e) => {
               const x = report.emotions.get(e)!;
@@ -126,16 +112,6 @@ export function StocksPage({ focus }: { focus?: { date: string; action?: 'noTrad
             })}
             format={(v) => `${v} 筆`}
           />
-          <div className="meal-split">
-            <div>
-              <span>照計畫的賣出</span>
-              <b>{pnlText(report.plannedPnl)}</b>
-            </div>
-            <div>
-              <span>計畫外的賣出</span>
-              <b>{pnlText(report.unplannedPnl)}</b>
-            </div>
-          </div>
         </>
       )}
 
@@ -181,8 +157,7 @@ export function StocksPage({ focus }: { focus?: { date: string; action?: 'noTrad
                         {t.symbol} {t.name}
                       </span>
                       <span className="money-sub">
-                        {t.price} × {t.shares % 1000 === 0 ? `${t.shares / 1000} 張` : `${fmtNum(t.shares)} 股`} · {EMOTIONS[t.emotion].label}
-                        {t.planned ? '' : ' · 計畫外'}
+                        {t.price} × {t.shares % 1000 === 0 ? `${t.shares / 1000} 張` : `${fmtNum(t.shares)} 股`} · {t.dca ? '定期定額' : EMOTIONS[t.emotion].label}
                       </span>
                     </span>
                     <span className="money-amt">
@@ -215,7 +190,9 @@ function TradeSheet({ initial, trades, onClose, onSaved }: { initial: Partial<Tr
   const [qty, setQty] = useState(initial.shares ? String(initial.shares % 1000 === 0 ? initial.shares / 1000 : initial.shares) : '');
   const [fee, setFee] = useState(initial.fee ? String(initial.fee) : '');
   const [emotion, setEmotion] = useState<Emotion | undefined>(initial.emotion);
-  const [planned, setPlanned] = useState<boolean | undefined>(initial.planned);
+  const [dca, setDca] = useState(initial.dca ?? false);
+  /** 定期定額的扣款金額：輸入金額與成交價時自動算股數 */
+  const [dcaAmount, setDcaAmount] = useState('');
   const [reason, setReason] = useState(initial.reason ?? '');
   const [date, setDate] = useState(initial.date ?? todayKey());
   const [time, setTime] = useState(initial.time ?? (initial.id ? '' : fmtHM(Date.now())));
@@ -224,31 +201,36 @@ function TradeSheet({ initial, trades, onClose, onSaved }: { initial: Partial<Tr
   // 交易過的股票，最近的在前
   const known = new Map<string, string | undefined>();
   for (const t of sortTrades(trades).reverse()) if (!known.has(t.symbol)) known.set(t.symbol, t.name);
-  const shares = (numOrUndef(qty) ?? 0) * (unit === 'lot' ? 1000 : 1);
+  const shares = (numOrUndef(qty) ?? 0) * (unit === 'lot' && !dca ? 1000 : 1);
   const p = numOrUndef(price) ?? 0;
+
+  function autoShares(amountText: string, priceText: string) {
+    const a = numOrUndef(amountText);
+    const pr = numOrUndef(priceText);
+    if (a && pr) setQty(String(Math.floor(a / pr)));
+  }
 
   async function save() {
     if (!symbol.trim()) return setError('請輸入股票代號或名稱');
     if (!(p > 0) || !(shares > 0)) return setError('請輸入價格和數量');
-    if (!emotion) return setError('選一下當時的心情，之後才看得出自己的模式');
-    if (planned === undefined) return setError('這筆是照計畫的嗎？');
+    if (!dca && !emotion) return setError('選一下當時的心情，之後才看得出自己的模式');
     await db.trades.put({
       id: initial.id ?? uid(),
       date,
       time: time || undefined,
-      side,
+      side: dca ? 'buy' : side,
       symbol: symbol.trim().toUpperCase(),
       name: name.trim() || undefined,
       price: p,
       shares,
       fee: numOrUndef(fee),
-      emotion,
-      planned,
+      emotion: dca ? 'calm' : emotion!,
+      dca: dca || undefined,
       reason: reason.trim() || undefined,
       createdAt: initial.createdAt ?? Date.now(),
     });
     void rescheduleReminders();
-    onSaved(`已記錄 ${side === 'buy' ? '買進' : '賣出'} ${symbol.trim()}`);
+    onSaved(`已記錄 ${dca ? '定期定額' : side === 'buy' ? '買進' : '賣出'} ${symbol.trim()}`);
     onClose();
   }
 
@@ -279,14 +261,30 @@ function TradeSheet({ initial, trades, onClose, onSaved }: { initial: Partial<Tr
         </>
       }
     >
-      <div className="segmented">
-        <button className={side === 'buy' ? 'active' : ''} onClick={() => setSide('buy')}>
-          買進
-        </button>
-        <button className={side === 'sell' ? 'active' : ''} onClick={() => setSide('sell')}>
-          賣出
-        </button>
-      </div>
+      <label className="toggle-row">
+        <input
+          type="checkbox"
+          checked={dca}
+          onChange={(e) => {
+            setDca(e.target.checked);
+            if (e.target.checked) setUnit('share');
+          }}
+        />
+        <span>
+          定期定額
+          <small className="muted">（自動扣款買進，不用選心情）</small>
+        </span>
+      </label>
+      {!dca && (
+        <div className="segmented">
+          <button className={side === 'buy' ? 'active' : ''} onClick={() => setSide('buy')}>
+            買進
+          </button>
+          <button className={side === 'sell' ? 'active' : ''} onClick={() => setSide('sell')}>
+            賣出
+          </button>
+        </div>
+      )}
       <div className="two-col">
         <label className="field">
           <span>代號</span>
@@ -313,47 +311,69 @@ function TradeSheet({ initial, trades, onClose, onSaved }: { initial: Partial<Tr
           ))}
         </div>
       )}
+      {dca && (
+        <label className="field">
+          <span>扣款金額（選填，填了會自動算股數）</span>
+          <input
+            type="number"
+            inputMode="decimal"
+            value={dcaAmount}
+            onChange={(e) => {
+              setDcaAmount(e.target.value);
+              autoShares(e.target.value, price);
+            }}
+            placeholder="例如 3000"
+          />
+        </label>
+      )}
       <div className="two-col">
         <label className="field">
           <span>成交價</span>
-          <input type="number" inputMode="decimal" value={price} onChange={(e) => setPrice(e.target.value)} />
+          <input
+            type="number"
+            inputMode="decimal"
+            value={price}
+            onChange={(e) => {
+              setPrice(e.target.value);
+              if (dca) autoShares(dcaAmount, e.target.value);
+            }}
+          />
         </label>
         <div className="field">
-          <span>數量</span>
+          <span>{dca ? '股數' : '數量'}</span>
           <div className="qty-row">
             <input type="number" inputMode="decimal" value={qty} onChange={(e) => setQty(e.target.value)} />
-            <button className={`chip${unit === 'lot' ? ' selected' : ''}`} onClick={() => setUnit('lot')}>
-              張
-            </button>
-            <button className={`chip${unit === 'share' ? ' selected' : ''}`} onClick={() => setUnit('share')}>
-              股
-            </button>
+            {!dca && (
+              <>
+                <button className={`chip${unit === 'lot' ? ' selected' : ''}`} onClick={() => setUnit('lot')}>
+                  張
+                </button>
+                <button className={`chip${unit === 'share' ? ' selected' : ''}`} onClick={() => setUnit('share')}>
+                  股
+                </button>
+              </>
+            )}
           </div>
         </div>
       </div>
       {p > 0 && shares > 0 && <div className="muted small">金額 {fmtTWD(round2(p * shares))}</div>}
 
-      <div className="section-label">當時的心情</div>
-      <div className="emotion-grid">
-        {EMOTION_ORDER.map((e) => (
-          <button key={e} className={`emotion-btn${emotion === e ? ' selected' : ''}`} onClick={() => setEmotion(e)}>
-            <b>{EMOTIONS[e].label}</b>
-            <small>{EMOTIONS[e].hint}</small>
-          </button>
-        ))}
-      </div>
-      <div className="section-label">這筆是照事先的計畫嗎？</div>
-      <div className="segmented">
-        <button className={planned === true ? 'active' : ''} onClick={() => setPlanned(true)}>
-          是，照計畫
-        </button>
-        <button className={planned === false ? 'active' : ''} onClick={() => setPlanned(false)}>
-          不是，臨時決定
-        </button>
-      </div>
+      {!dca && (
+        <>
+          <div className="section-label">當時的心情</div>
+          <div className="emotion-grid">
+            {EMOTION_ORDER.map((e) => (
+              <button key={e} className={`emotion-btn${emotion === e ? ' selected' : ''}`} onClick={() => setEmotion(e)}>
+                <b>{EMOTIONS[e].label}</b>
+                <small>{EMOTIONS[e].hint}</small>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
       <label className="field">
-        <span>理由（選填）</span>
-        <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="例如：跌到支撐、看到新聞" />
+        <span>{dca ? '備註（選填）' : '理由（選填）'}</span>
+        <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder={dca ? '例如：每月 6 號扣款' : '例如：跌到支撐、看到新聞'} />
       </label>
       <div className="two-col">
         <label className="field">

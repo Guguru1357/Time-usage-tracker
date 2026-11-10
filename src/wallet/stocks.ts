@@ -59,94 +59,43 @@ export function analyzePositions(trades: Trade[]): { holdings: Holding[]; realiz
   return { holdings, realized };
 }
 
-export interface Warning {
-  level: 'high' | 'mid';
-  text: string;
-}
-
 export interface TradeReport {
   count: number;
   tradingDays: number;
-  maxPerDay: number;
-  unplanned: number;
+  /** 定期定額的筆數 */
+  dca: number;
+  /** 自己下單（非定期定額）中帶情緒的筆數 */
   emotional: number;
+  /** 自己下單的筆數 */
+  manual: number;
+  /** 依心情統計（不含定期定額） */
   emotions: Map<Emotion, { count: number; pnl: number; sells: number }>;
-  plannedPnl: number;
-  unplannedPnl: number;
-  warnings: Warning[];
 }
 
-/** 期間 [from, to] 內的交易行為檢查 */
+/** 期間 [from, to] 內的交易統計 */
 export function tradeReport(all: Trade[], from: string, to: string): TradeReport {
   const { realized } = analyzePositions(all);
   const list = sortTrades(all).filter((t) => t.date >= from && t.date <= to);
-  const perDay = new Map<string, number>();
-  for (const t of list) perDay.set(t.date, (perDay.get(t.date) ?? 0) + 1);
-
+  const manualList = list.filter((t) => !t.dca);
   const emotions = new Map<Emotion, { count: number; pnl: number; sells: number }>();
-  let plannedPnl = 0;
-  let unplannedPnl = 0;
-  for (const t of list) {
+  for (const t of manualList) {
     const e = emotions.get(t.emotion) ?? { count: 0, pnl: 0, sells: 0 };
     e.count++;
     const r = realized.get(t.id);
     if (r !== undefined) {
-      e.pnl += r;
+      e.pnl = round2(e.pnl + r);
       e.sells++;
-      if (t.planned) plannedPnl += r;
-      else unplannedPnl += r;
     }
     emotions.set(t.emotion, e);
   }
-
-  const count = list.length;
-  const unplanned = list.filter((t) => !t.planned).length;
-  const emotional = list.filter((t) => t.emotion !== 'calm').length;
-  const maxPerDay = Math.max(0, ...perDay.values());
-  const warnings: Warning[] = [];
-
-  // 單日交易太多
-  const busyDays = [...perDay.values()].filter((n) => n >= 4).length;
-  if (busyDays) warnings.push({ level: 'high', text: `有 ${busyDays} 天單日交易 4 筆以上，可能過度交易` });
-
-  // 連續多天都在交易
-  let run = 0;
-  let maxRun = 0;
-  let prev = '';
-  for (const d of [...perDay.keys()].sort()) {
-    run = prev && nextWeekday(prev) === d ? run + 1 : 1;
-    maxRun = Math.max(maxRun, run);
-    prev = d;
-  }
-  if (maxRun >= 5) warnings.push({ level: 'mid', text: `連續 ${maxRun} 個交易日都有進出` });
-
-  // 賠錢賣出後 1 天內又買進
-  let revenge = 0;
-  for (const t of list) {
-    if (t.side !== 'sell' || (realized.get(t.id) ?? 0) >= 0) continue;
-    const limit = addDays(t.date, 1);
-    if (list.some((b) => b.side === 'buy' && b.date >= t.date && b.date <= limit && sortTrades([t, b])[0] === t && b.id !== t.id)) revenge++;
-  }
-  if (revenge) warnings.push({ level: 'high', text: `${revenge} 次賠錢賣出後一天內又買進（想翻本？）` });
-
-  // 短進短出：買進後 3 天內賣出同一檔
-  let flips = 0;
-  for (const s of list) {
-    if (s.side !== 'sell') continue;
-    if (list.some((b) => b.side === 'buy' && b.symbol === s.symbol && b.date <= s.date && b.date >= addDays(s.date, -3))) flips++;
-  }
-  if (flips >= 2) warnings.push({ level: 'mid', text: `${flips} 次買進後 3 天內就賣出（短進短出）` });
-
-  if (count >= 3 && unplanned / count > 0.4) warnings.push({ level: 'high', text: `${Math.round((unplanned / count) * 100)}% 的交易不在計畫內` });
-  if (count >= 3 && emotional / count > 0.5) warnings.push({ level: 'mid', text: `${Math.round((emotional / count) * 100)}% 的交易帶著情緒` });
-
-  return { count, tradingDays: perDay.size, maxPerDay, unplanned, emotional, emotions, plannedPnl: round2(plannedPnl), unplannedPnl: round2(unplannedPnl), warnings };
-}
-
-function nextWeekday(date: string): string {
-  let d = addDays(date, 1);
-  while ([0, 6].includes(new Date(dayStart(d)).getDay())) d = addDays(d, 1);
-  return d;
+  return {
+    count: list.length,
+    tradingDays: new Set(list.map((t) => t.date)).size,
+    dca: list.length - manualList.length,
+    manual: manualList.length,
+    emotional: manualList.filter((t) => t.emotion !== 'calm').length,
+    emotions,
+  };
 }
 
 /** 每週交易筆數（週一開始），最後一週包含 to */
