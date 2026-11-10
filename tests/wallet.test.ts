@@ -1,14 +1,14 @@
 import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { buildBackup, restoreBackup } from '../src/backup';
-import { db, type Subscription, type Trade } from '../src/db';
+import { db, normalizeAccountKind, type Subscription, type Trade } from '../src/db';
 import { ensureSeeded } from '../src/defaults';
 import { salaryReminderTimes, tradeReminderTimes } from '../src/notifications';
 import { HOUR, MIN, dayStart } from '../src/time';
-import { addIncome, fmtMoney, rateOf, saveAccount, setBalance, totalAt } from '../src/wallet/assets';
+import { addIncome, balancesAt, fmtMoney, holdingsCost, rateOf, saveAccount, setBalance, totalAt } from '../src/wallet/assets';
 import { importPwaBackup } from '../src/wallet/importPwa';
 import { addGiftLog, giftCount, monthlyTWD, nextCharge, saveExpense } from '../src/wallet/money';
-import { analyzePositions, dailyCounts, tradeReport, weeklyCounts } from '../src/wallet/stocks';
+import { analyzePositions, dailyCounts, deleteTrade, saveTrade, tradeReport, weeklyCounts } from '../src/wallet/stocks';
 
 beforeEach(async () => {
   await db.delete();
@@ -24,7 +24,6 @@ const trade = (t: Partial<Trade>): Trade => ({
   symbol: '2330',
   price: 100,
   shares: 1000,
-  emotion: 'calm',
   createdAt: n,
   ...t,
 });
@@ -39,17 +38,14 @@ describe('stocks', () => {
     expect(holdings).toEqual([{ symbol: '2330', name: undefined, shares: 1000, avgCost: 110 }]);
   });
 
-  it('reports moods of manual trades only, and counts DCA separately', () => {
+  it('summarises trades, DCA and realized P&L for a period', () => {
     const list = [
       trade({ date: '2026-11-02', price: 100 }),
-      trade({ date: '2026-11-03', side: 'sell', price: 90, emotion: 'fear' }),
-      trade({ date: '2026-11-03', price: 95, emotion: 'revenge' }),
+      trade({ date: '2026-11-03', side: 'sell', price: 90 }),
+      trade({ date: '2026-11-03', price: 95 }),
       trade({ date: '2026-11-06', symbol: '0050', price: 190, shares: 15, dca: true }),
     ];
-    const r = tradeReport(list, '2026-10-10', '2026-11-08');
-    expect(r).toMatchObject({ count: 4, tradingDays: 3, dca: 1, manual: 3, emotional: 2 });
-    expect(r.emotions.get('fear')).toEqual({ count: 1, pnl: -10_000, sells: 1 });
-    expect(r.emotions.get('calm')?.count).toBe(1);
+    expect(tradeReport(list, '2026-10-10', '2026-11-08')).toEqual({ count: 4, tradingDays: 3, dca: 1, realized: -10_000 });
     // 定期定額照樣算進持股
     expect(analyzePositions(list).holdings.find((h) => h.symbol === '0050')?.shares).toBe(15);
   });
@@ -92,8 +88,8 @@ describe('reminders', () => {
 
 describe('assets', () => {
   it('sums the latest balance of each account, and salary can top up an account', async () => {
-    const post = await saveAccount({ name: '郵局', kind: 'post' });
-    const bank = await saveAccount({ name: '國泰', kind: 'bank' });
+    const post = await saveAccount({ name: '郵局', kind: 'deposit' });
+    const bank = await saveAccount({ name: '國泰', kind: 'deposit' });
     await setBalance(post, 50_000, '2026-10-31');
     await setBalance(bank, 20_000, '2026-10-31');
     await addIncome({ date: '2026-11-07', amount: 40_000, kind: 'salary', accountId: bank }, true);
@@ -104,8 +100,8 @@ describe('assets', () => {
   });
 
   it('converts foreign currency accounts and reports currencies without a rate', async () => {
-    const usd = await saveAccount({ name: '國泰 美元', kind: 'bank', currency: 'USD' });
-    const jpy = await saveAccount({ name: '日圓帳戶', kind: 'bank', currency: 'JPY' });
+    const usd = await saveAccount({ name: '國泰 美元', kind: 'foreign', currency: 'USD' });
+    const jpy = await saveAccount({ name: '日圓帳戶', kind: 'foreign', currency: 'JPY' });
     await setBalance(usd, 1000, '2026-11-01');
     await setBalance(jpy, 50_000, '2026-11-01');
     const [accounts, balances] = [await db.accounts.toArray(), await db.balances.toArray()];
@@ -115,6 +111,41 @@ describe('assets', () => {
     expect(totalAt(accounts, balances, (c) => rateOf(c, settings))).toEqual({ twd: 43_000, missing: [] });
     expect(fmtMoney(1234.5, 'USD')).toBe('US$1,234.5');
     expect(fmtMoney(50000, 'JPY')).toBe('JP¥50,000');
+  });
+});
+
+describe('stock ↔ broker account sync', () => {
+  it('moves cash on buy/sell, and reverts on edit and delete', async () => {
+    const broker = await saveAccount({ name: '元大交割戶', kind: 'broker' });
+    await setBalance(broker, 200_000, '2026-11-01');
+    const bal = async () => balancesAt(await db.balances.toArray()).get(broker)!.amount;
+
+    const buy = trade({ date: '2026-11-03', price: 100, shares: 1000, fee: 142, accountId: broker });
+    await saveTrade(buy);
+    expect(await bal()).toBe(200_000 - 100_142);
+    // 改價格：先還原再重新扣
+    await saveTrade({ ...buy, price: 110 });
+    expect(await bal()).toBe(200_000 - 110_142);
+    const sell = trade({ date: '2026-11-05', side: 'sell', price: 120, shares: 1000, fee: 500, accountId: broker });
+    await saveTrade(sell);
+    expect(await bal()).toBe(200_000 - 110_142 + 119_500);
+    // 改成不同步、刪除
+    await saveTrade({ ...sell, accountId: undefined });
+    expect(await bal()).toBe(200_000 - 110_142);
+    await deleteTrade(buy.id);
+    expect(await bal()).toBe(200_000);
+  });
+
+  it('counts stock holdings at cost', () => {
+    const list = [trade({ price: 100, shares: 2000, fee: 200 }), trade({ side: 'sell', price: 150, shares: 1000, date: '2026-11-04' })];
+    expect(holdingsCost(list)).toBe(100_100);
+    expect(holdingsCost(list, '2026-11-02')).toBe(200_200);
+  });
+
+  it('maps old account types to the new categories', () => {
+    expect(normalizeAccountKind('post')).toBe('deposit');
+    expect(normalizeAccountKind('bank', 'USD')).toBe('foreign');
+    expect(normalizeAccountKind('broker')).toBe('broker');
   });
 });
 

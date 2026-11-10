@@ -1,12 +1,13 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useEffect, useState } from 'react';
 import { IconPlus } from '../components/Icons';
-import { db, uid, type Emotion, type Trade } from '../db';
+import { db, uid, type Trade } from '../db';
 import { rescheduleReminders } from '../notifications';
 import { addDays, fmtDateLabel, fmtHM, todayKey } from '../time';
 import { fmtNum, fmtTWD, round2 } from './money';
-import { EMOTIONS, EMOTION_ORDER, analyzePositions, markTradeDay, reportedTradeDays, sortTrades, tradeAmount, tradeReport, dailyCounts, weeklyCounts } from './stocks';
-import { BarChart, HBarList, Sheet, numOrUndef, useToast } from './ui';
+import { accountKind, currencyOf } from './assets';
+import { analyzePositions, dailyCounts, deleteTrade, markTradeDay, reportedTradeDays, saveTrade, sortTrades, tradeAmount, tradeCash, tradeReport, weeklyCounts } from './stocks';
+import { BarChart, Sheet, numOrUndef, useToast } from './ui';
 
 const PERIOD_DAYS = 30;
 
@@ -98,9 +99,9 @@ export function StocksPage({ focus }: { focus?: { date: string; action?: 'noTrad
           <small>自動扣款</small>
         </div>
         <div>
-          <span>帶情緒</span>
-          <b>{report.manual ? Math.round((report.emotional / report.manual) * 100) : 0}%</b>
-          <small>自己下單 {report.manual} 筆</small>
+          <span>已實現損益</span>
+          <b className={report.realized > 0 ? 'gain' : report.realized < 0 ? 'loss' : ''}>{pnlText(report.realized)}</b>
+          <small>近 30 天賣出</small>
         </div>
       </div>
 
@@ -118,19 +119,6 @@ export function StocksPage({ focus }: { focus?: { date: string; action?: 'noTrad
       <div className="card chart-card">
         <BarChart key={countMode} bars={countMode === 'day' ? daily : weekly} format={(v) => `${v} 筆`} empty="還沒有交易紀錄" />
       </div>
-
-      {report.manual > 0 && (
-        <>
-          <h3>自己下單時的心情（筆數 · 已實現損益）</h3>
-          <HBarList
-            rows={EMOTION_ORDER.filter((e) => report.emotions.get(e)).map((e) => {
-              const x = report.emotions.get(e)!;
-              return { key: e, label: EMOTIONS[e].label, value: x.count, sub: x.sells ? pnlText(x.pnl) : '', color: e === 'calm' ? '#8fa894' : '#b9a58f' };
-            })}
-            format={(v) => `${v} 筆`}
-          />
-        </>
-      )}
 
       {holdings.length > 0 && (
         <>
@@ -174,7 +162,7 @@ export function StocksPage({ focus }: { focus?: { date: string; action?: 'noTrad
                         {t.symbol} {t.name}
                       </span>
                       <span className="money-sub">
-                        {t.price} × {t.shares % 1000 === 0 ? `${t.shares / 1000} 張` : `${fmtNum(t.shares)} 股`} · {t.dca ? '定期定額' : EMOTIONS[t.emotion].label}
+                        {t.price} × {t.shares % 1000 === 0 ? `${t.shares / 1000} 張` : `${fmtNum(t.shares)} 股`} {t.dca ? ' · 定期定額' : ''}
                       </span>
                     </span>
                     <span className="money-amt">
@@ -206,7 +194,6 @@ function TradeSheet({ initial, trades, onClose, onSaved }: { initial: Partial<Tr
   const [unit, setUnit] = useState<'lot' | 'share'>(initial.shares && initial.shares % 1000 !== 0 ? 'share' : 'lot');
   const [qty, setQty] = useState(initial.shares ? String(initial.shares % 1000 === 0 ? initial.shares / 1000 : initial.shares) : '');
   const [fee, setFee] = useState(initial.fee ? String(initial.fee) : '');
-  const [emotion, setEmotion] = useState<Emotion | undefined>(initial.emotion);
   const [dca, setDca] = useState(initial.dca ?? false);
   /** 定期定額的扣款金額：輸入金額與成交價時自動算股數 */
   const [dcaAmount, setDcaAmount] = useState('');
@@ -214,6 +201,14 @@ function TradeSheet({ initial, trades, onClose, onSaved }: { initial: Partial<Tr
   const [date, setDate] = useState(initial.date ?? todayKey());
   const [time, setTime] = useState(initial.time ?? (initial.id ? '' : fmtHM(Date.now())));
   const [error, setError] = useState('');
+  // 可以同步的台幣帳戶：證券交割戶排前面
+  const accounts = (useLiveQuery(() => db.accounts.orderBy('order').toArray()) ?? [])
+    .filter((a) => !a.archived && currencyOf(a) === 'TWD')
+    .sort((a, b) => Number(accountKind(b) === 'broker') - Number(accountKind(a) === 'broker'));
+  const firstBroker = accounts.find((a) => accountKind(a) === 'broker');
+  // 新交易預設同步到第一個證券帳戶；舊交易沿用原本的設定
+  const [accountId, setAccountId] = useState<string | undefined | null>(initial.id ? (initial.accountId ?? null) : undefined);
+  const syncTo = accountId === undefined ? firstBroker?.id : (accountId ?? undefined);
 
   // 交易過的股票，最近的在前
   const known = new Map<string, string | undefined>();
@@ -230,8 +225,7 @@ function TradeSheet({ initial, trades, onClose, onSaved }: { initial: Partial<Tr
   async function save() {
     if (!symbol.trim()) return setError('請輸入股票代號或名稱');
     if (!(p > 0) || !(shares > 0)) return setError('請輸入價格和數量');
-    if (!dca && !emotion) return setError('選一下當時的心情，之後才看得出自己的模式');
-    await db.trades.put({
+    await saveTrade({
       id: initial.id ?? uid(),
       date,
       time: time || undefined,
@@ -241,19 +235,21 @@ function TradeSheet({ initial, trades, onClose, onSaved }: { initial: Partial<Tr
       price: p,
       shares,
       fee: numOrUndef(fee),
-      emotion: dca ? 'calm' : emotion!,
+      ...(initial.emotion ? { emotion: initial.emotion } : {}),
       dca: dca || undefined,
       reason: reason.trim() || undefined,
+      accountId: syncTo,
       createdAt: initial.createdAt ?? Date.now(),
     });
     void rescheduleReminders();
-    onSaved(`已記錄 ${dca ? '定期定額' : side === 'buy' ? '買進' : '賣出'} ${symbol.trim()}`);
+    const synced = syncTo ? `，已同步到${accounts.find((a) => a.id === syncTo)?.name}` : '';
+    onSaved(`已記錄 ${dca ? '定期定額' : side === 'buy' ? '買進' : '賣出'} ${symbol.trim()}${synced}`);
     onClose();
   }
 
   async function remove() {
-    if (!initial.id || !confirm('刪除這筆交易？')) return;
-    await db.trades.delete(initial.id);
+    if (!initial.id || !confirm(`刪除這筆交易？${initial.accountId ? '\n帳戶餘額會一併還原。' : ''}`)) return;
+    await deleteTrade(initial.id);
     onClose();
   }
 
@@ -289,7 +285,7 @@ function TradeSheet({ initial, trades, onClose, onSaved }: { initial: Partial<Tr
         />
         <span>
           定期定額
-          <small className="muted">（自動扣款買進，不用選心情）</small>
+          <small className="muted">（自動扣款買進）</small>
         </span>
       </label>
       {!dca && (
@@ -375,19 +371,6 @@ function TradeSheet({ initial, trades, onClose, onSaved }: { initial: Partial<Tr
       </div>
       {p > 0 && shares > 0 && <div className="muted small">金額 {fmtTWD(round2(p * shares))}</div>}
 
-      {!dca && (
-        <>
-          <div className="section-label">當時的心情</div>
-          <div className="emotion-grid">
-            {EMOTION_ORDER.map((e) => (
-              <button key={e} className={`emotion-btn${emotion === e ? ' selected' : ''}`} onClick={() => setEmotion(e)}>
-                <b>{EMOTIONS[e].label}</b>
-                <small>{EMOTIONS[e].hint}</small>
-              </button>
-            ))}
-          </div>
-        </>
-      )}
       <label className="field">
         <span>{dca ? '備註（選填）' : '理由（選填）'}</span>
         <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder={dca ? '例如：每月 6 號扣款' : '例如：跌到支撐、看到新聞'} />
@@ -406,6 +389,33 @@ function TradeSheet({ initial, trades, onClose, onSaved }: { initial: Partial<Tr
         <span>手續費＋稅（選填）</span>
         <input type="number" inputMode="decimal" value={fee} onChange={(e) => setFee(e.target.value)} placeholder="不填也可以" />
       </label>
+      <div className="field">
+        <span>同步到帳戶</span>
+        {accounts.length === 0 ? (
+          <small className="muted">到「資產」新增證券帳戶（交割戶）後，買賣會自動同步餘額</small>
+        ) : (
+          <>
+            <div className="chips">
+              {accounts.map((a) => (
+                <button key={a.id} className={`chip${syncTo === a.id ? ' selected' : ''}`} onClick={() => setAccountId(a.id)}>
+                  {a.name}
+                </button>
+              ))}
+              <button className={`chip${!syncTo ? ' selected' : ''}`} onClick={() => setAccountId(null)}>
+                不同步
+              </button>
+            </div>
+            {syncTo && p > 0 && shares > 0 && (
+              <small className="muted">
+                {(() => {
+                  const c = tradeCash({ side: dca ? 'buy' : side, price: p, shares, fee: numOrUndef(fee) });
+                  return `${accounts.find((a) => a.id === syncTo)?.name} ${c < 0 ? '扣款' : '入帳'} ${fmtTWD(Math.abs(c))}`;
+                })()}
+              </small>
+            )}
+          </>
+        )}
+      </div>
       {error && <div className="error">{error}</div>}
     </Sheet>
   );

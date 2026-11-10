@@ -2086,6 +2086,7 @@ h3 {
 }
 .stock-stats b {
   font-size: 20px;
+  white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
 .warn-list {
@@ -2126,33 +2127,6 @@ h3 {
   flex-shrink: 0;
   background: var(--surface-2);
   color: var(--text-2);
-}
-.emotion-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 6px;
-}
-.emotion-btn {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  text-align: left;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  padding: 8px 12px;
-}
-.emotion-btn b {
-  font-size: 15px;
-}
-.emotion-btn small {
-  font-size: 12px;
-  color: var(--muted);
-}
-.emotion-btn.selected {
-  border-color: var(--accent);
-  background: var(--surface-2);
-  box-shadow: inset 0 0 0 1px var(--accent);
 }
 .qty-row {
   display: flex;
@@ -2245,4 +2219,15 @@ h3 {
 .segmented.mini button {
   padding: 5px 12px;
   font-size: 13px;
+}
+
+.stock-stats .gain {
+  color: var(--ok);
+}
+.stock-stats .loss {
+  color: var(--danger);
+}
+.subtotal {
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
 }

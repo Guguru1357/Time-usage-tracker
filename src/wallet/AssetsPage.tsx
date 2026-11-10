@@ -1,12 +1,15 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useEffect, useState } from 'react';
-import { db, type Account, type Income } from '../db';
+import { db, type Account, type AccountKind, type Income } from '../db';
 import { rescheduleReminders } from '../notifications';
 import { fmtDateLabel, todayKey } from '../time';
 import { useSettings } from '../hooks';
 import {
   ACCOUNT_KINDS,
+  ACCOUNT_KIND_ORDER,
   CURRENCIES,
+  accountKind,
+  holdingsCost,
   INCOME_KINDS,
   addIncome,
   balancesAt,
@@ -23,10 +26,23 @@ import {
 import { fmtTWD, monthRange, shiftMonth } from './money';
 import { BarChart, HBarList, Sheet, numOrUndef, useToast } from './ui';
 
+const KIND_EMPTY: Record<AccountKind, string> = {
+  deposit: '郵局、銀行的綜合存款帳戶，按「＋ 新增」',
+  broker: '證券交割戶；記股票買賣時會自動同步餘額',
+  foreign: '美元、日圓等外幣帳戶',
+};
+
+const KIND_PLACEHOLDER: Record<AccountKind, string> = {
+  deposit: '例如：郵局、國泰世華',
+  broker: '例如：元大證券交割戶',
+  foreign: '例如：國泰 美元帳戶',
+};
+
 export function AssetsPage({ openIncome }: { openIncome?: number }) {
   const accounts = (useLiveQuery(() => db.accounts.orderBy('order').toArray()) ?? []).filter((a) => !a.archived);
   const balances = useLiveQuery(() => db.balances.toArray()) ?? [];
   const incomes = useLiveQuery(() => db.incomes.orderBy('date').reverse().toArray()) ?? [];
+  const trades = useLiveQuery(() => db.trades.toArray()) ?? [];
   const [editAccount, setEditAccount] = useState<Partial<Account> | null>(null);
   const [balanceOf, setBalanceOf] = useState<Account | null>(null);
   const [income, setIncome] = useState(false);
@@ -42,10 +58,12 @@ export function AssetsPage({ openIncome }: { openIncome?: number }) {
   const today = todayKey();
   const current = balancesAt(balances);
   const month = today.slice(0, 7);
+  // 總資產 = 各帳戶（換算台幣）＋ 股票持股成本
   const totals = totalAt(accounts, balances, rates);
-  const total = totals.twd;
+  const stocks = holdingsCost(trades);
+  const total = totals.twd + stocks;
   const lastMonthEnd = monthRange(shiftMonth(month, -1)).to;
-  const prevTotal = totalAt(accounts, balances, rates, lastMonthEnd).twd;
+  const prevTotal = totalAt(accounts, balances, rates, lastMonthEnd).twd + holdingsCost(trades, lastMonthEnd);
   // 用到的外幣（台幣以外）
   const foreign = [...new Set(accounts.map(currencyOf))].filter((c) => c !== 'TWD');
   const twdOf = (a: Account) => {
@@ -58,7 +76,11 @@ export function AssetsPage({ openIncome }: { openIncome?: number }) {
   const trend = Array.from({ length: 12 }, (_, i) => {
     const m = shiftMonth(month, i - 11);
     const end = m === month ? today : monthRange(m).to;
-    return { label: `${Number(m.slice(0, 4))}/${Number(m.slice(5))}`, short: `${Number(m.slice(5))}`, value: totalAt(accounts, balances, rates, end).twd };
+    return {
+      label: `${Number(m.slice(0, 4))}/${Number(m.slice(5))}`,
+      short: `${Number(m.slice(5))}`,
+      value: totalAt(accounts, balances, rates, end).twd + holdingsCost(trades, end),
+    };
   });
 
   return (
@@ -73,6 +95,7 @@ export function AssetsPage({ openIncome }: { openIncome?: number }) {
           </small>
         )}
         {foreign.length > 0 && <small className="muted">外幣依目前匯率換算成台幣</small>}
+        {stocks > 0 && <small className="muted">含股票持股 {fmtTWD(stocks)}（以成本計）</small>}
         {totals.missing.length > 0 && (
           <div className="warn">還沒設定 {totals.missing.map((c) => currencyInfo(c).name).join('、')} 的匯率，這些帳戶沒有算進總資產</div>
         )}
@@ -86,47 +109,68 @@ export function AssetsPage({ openIncome }: { openIncome?: number }) {
         <span className="salary-mark">{salary.length ? '✓' : '＋'}</span>
       </button>
 
-      <div className="section-head">
-        <h3>帳戶</h3>
-        <button className="text-btn" onClick={() => setEditAccount({ kind: 'bank' })}>
-          ＋ 新增帳戶
-        </button>
-      </div>
-      {accounts.length === 0 ? (
-        <div className="empty-box">
-          <p>先新增郵局、銀行帳戶，再輸入目前餘額</p>
-        </div>
-      ) : (
-        <div className="money-list">
-          {accounts.map((a) => {
-            const b = current.get(a.id);
-            const cur = currencyOf(a);
-            const r = rates(cur);
-            return (
-              <button key={a.id} className="money-row" onClick={() => setBalanceOf(a)}>
-                <span className="money-main">
-                  <span className="money-title">{a.name}</span>
-                  <span className="money-sub">
-                    {ACCOUNT_KINDS[a.kind]}
-                    {cur !== 'TWD' ? ` · ${currencyInfo(cur).name}` : ''}
-                    {b ? ` · ${fmtDateLabel(b.date)} 更新` : ' · 還沒輸入餘額'}
-                  </span>
-                </span>
-                <span className="money-amt">
-                  {b ? fmtMoney(b.amount, cur) : '—'}
-                  {b && cur !== 'TWD' && <small>{r !== undefined ? `≈ ${fmtTWD(b.amount * r)}` : '未設匯率'}</small>}
-                </span>
+      {ACCOUNT_KIND_ORDER.map((kind) => {
+        const list = accounts.filter((a) => accountKind(a) === kind);
+        const showStocks = kind === 'broker' && stocks > 0;
+        const subtotal = list.reduce((a, x) => a + twdOf(x), 0) + (kind === 'broker' ? stocks : 0);
+        return (
+          <div key={kind}>
+            <div className="section-head">
+              <h3>
+                {ACCOUNT_KINDS[kind]}
+                {(list.length > 0 || showStocks) && <span className="subtotal"> {fmtTWD(subtotal)}</span>}
+              </h3>
+              <button className="text-btn" onClick={() => setEditAccount({ kind })}>
+                ＋ 新增
               </button>
-            );
-          })}
-        </div>
-      )}
+            </div>
+            {list.length === 0 && !showStocks ? (
+              <p className="muted small">{KIND_EMPTY[kind]}</p>
+            ) : (
+              <div className="money-list">
+                {list.map((a) => {
+                  const b = current.get(a.id);
+                  const cur = currencyOf(a);
+                  const r = rates(cur);
+                  return (
+                    <button key={a.id} className="money-row" onClick={() => setBalanceOf(a)}>
+                      <span className="money-main">
+                        <span className="money-title">{a.name}</span>
+                        <span className="money-sub">
+                          {cur !== 'TWD' ? `${currencyInfo(cur).name} · ` : ''}
+                          {b ? `${fmtDateLabel(b.date)} 更新` : '還沒輸入餘額'}
+                        </span>
+                      </span>
+                      <span className="money-amt">
+                        {b ? fmtMoney(b.amount, cur) : '—'}
+                        {b && cur !== 'TWD' && <small>{r !== undefined ? `≈ ${fmtTWD(b.amount * r)}` : '未設匯率'}</small>}
+                      </span>
+                    </button>
+                  );
+                })}
+                {showStocks && (
+                  <div className="money-row static">
+                    <span className="money-main">
+                      <span className="money-title">股票持股</span>
+                      <span className="money-sub">以平均成本計，在「股票」頁記錄買賣</span>
+                    </span>
+                    <span className="money-amt">{fmtTWD(stocks)}</span>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
 
-      {accounts.length > 1 && total > 0 && (
+      {total > 0 && (
         <>
           <h3>資產分布</h3>
           <HBarList
-            rows={accounts.map((a) => ({ key: a.id, label: a.name, value: twdOf(a), sub: `${Math.round((twdOf(a) / total) * 100)}%` }))}
+            rows={ACCOUNT_KIND_ORDER.map((kind) => {
+              const v = accounts.filter((a) => accountKind(a) === kind).reduce((a, x) => a + twdOf(x), 0) + (kind === 'broker' ? stocks : 0);
+              return { key: kind, label: ACCOUNT_KINDS[kind], value: v, sub: `${Math.round((v / total) * 100)}%` };
+            }).filter((r) => r.value > 0)}
             format={fmtTWD}
           />
         </>
@@ -213,7 +257,7 @@ export function AssetsPage({ openIncome }: { openIncome?: number }) {
 
       {editAccount && <AccountSheet initial={editAccount} onClose={() => setEditAccount(null)} />}
       {balanceOf && <BalanceSheet account={balanceOf} onEdit={() => (setEditAccount(balanceOf), setBalanceOf(null))} onClose={() => setBalanceOf(null)} onSaved={say} />}
-      {income && <IncomeSheet accounts={accounts.filter((a) => currencyOf(a) === 'TWD')} onClose={() => setIncome(false)} onSaved={say} />}
+      {income && <IncomeSheet accounts={accounts.filter((a) => accountKind(a) === 'deposit' && currencyOf(a) === 'TWD')} onClose={() => setIncome(false)} onSaved={say} />}
       {toast}
     </>
   );
@@ -221,14 +265,16 @@ export function AssetsPage({ openIncome }: { openIncome?: number }) {
 
 function AccountSheet({ initial, onClose }: { initial: Partial<Account>; onClose: () => void }) {
   const [name, setName] = useState(initial.name ?? '');
-  const [kind, setKind] = useState<Account['kind']>(initial.kind ?? 'bank');
-  const [currency, setCurrency] = useState(currencyOf(initial));
+  const [kind, setKind] = useState<AccountKind>(initial.kind ? accountKind({ kind: initial.kind, currency: initial.currency }) : 'deposit');
+  const [currency, setCurrency] = useState(currencyOf(initial) === 'TWD' ? 'USD' : currencyOf(initial));
+  // 綜合存款、證券用台幣；外幣帳戶才選幣別
+  const accountCurrency = kind === 'foreign' ? currency : 'TWD';
   const [amount, setAmount] = useState('');
   const [error, setError] = useState('');
 
   async function save() {
-    if (!name.trim()) return setError('請輸入名稱，例如：郵局、國泰世華');
-    const id = await saveAccount({ id: initial.id, name: name.trim(), kind, currency: currency === 'TWD' ? undefined : currency });
+    if (!name.trim()) return setError(`請輸入名稱，${KIND_PLACEHOLDER[kind]}`);
+    const id = await saveAccount({ id: initial.id, name: name.trim(), kind, currency: accountCurrency === 'TWD' ? undefined : accountCurrency });
     const v = numOrUndef(amount);
     if (!initial.id && v !== undefined) await setBalance(id, v, todayKey());
     onClose();
@@ -260,38 +306,33 @@ function AccountSheet({ initial, onClose }: { initial: Partial<Account>; onClose
         </>
       }
     >
-      <div className="chips">
-        {(Object.keys(ACCOUNT_KINDS) as Account['kind'][]).map((k) => (
-          <button
-            key={k}
-            className={`chip${kind === k ? ' selected' : ''}`}
-            onClick={() => {
-              setKind(k);
-              if (!name.trim() && (k === 'post' || k === 'cash')) setName(ACCOUNT_KINDS[k]);
-            }}
-          >
+      <div className="segmented">
+        {ACCOUNT_KIND_ORDER.map((k) => (
+          <button key={k} className={kind === k ? 'active' : ''} onClick={() => setKind(k)}>
             {ACCOUNT_KINDS[k]}
           </button>
         ))}
       </div>
       <label className="field">
         <span>名稱</span>
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="例如：郵局、國泰世華、國泰 美元帳戶" />
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder={KIND_PLACEHOLDER[kind]} />
       </label>
-      <div className="field">
-        <span>幣別</span>
-        <div className="chips">
-          {CURRENCIES.map((c) => (
-            <button key={c.code} className={`chip${currency === c.code ? ' selected' : ''}`} onClick={() => setCurrency(c.code)}>
-              {c.name}
-            </button>
-          ))}
+      {kind === 'foreign' && (
+        <div className="field">
+          <span>幣別</span>
+          <div className="chips">
+            {CURRENCIES.filter((c) => c.code !== 'TWD').map((c) => (
+              <button key={c.code} className={`chip${currency === c.code ? ' selected' : ''}`} onClick={() => setCurrency(c.code)}>
+                {c.name}
+              </button>
+            ))}
+          </div>
         </div>
-        {initial.id && currency !== currencyOf(initial) && <small className="warn">改幣別不會換算舊的餘額，請之後重新輸入一次餘額</small>}
-      </div>
+      )}
+      {initial.id && accountCurrency !== currencyOf(initial) && <small className="warn">改幣別不會換算舊的餘額，請之後重新輸入一次餘額</small>}
       {!initial.id && (
         <label className="field">
-          <span>目前餘額（{currencyInfo(currency).name}，選填）</span>
+          <span>目前餘額（{currencyInfo(accountCurrency).name}，選填）</span>
           <input type="number" inputMode="decimal" className="amount-input" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0" />
         </label>
       )}

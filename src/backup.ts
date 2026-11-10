@@ -1,7 +1,7 @@
 import { Capacitor } from '@capacitor/core';
 import { Directory, Encoding, Filesystem } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
-import { db, type Activity, type Category, type Entry, type Habit, type HabitLog, type Plan, type Settings, type StudyDetails } from './db';
+import { db, normalizeAccountKind, type Account, type Activity, type Category, type Entry, type Habit, type HabitLog, type Plan, type Settings, type StudyDetails } from './db';
 
 /** 錢包的資料表；備份與還原時一起處理 */
 const WALLET_TABLES = ['expenseCats', 'expenses', 'quickItems', 'subscriptions', 'giftCards', 'accounts', 'balances', 'incomes', 'trades'] as const;
@@ -138,7 +138,9 @@ export async function restoreBackup(b: BackupFile): Promise<void> {
     if (b.habits) await db.habits.clear().then(() => db.habits.bulkAdd(b.habits!));
     if (b.habitLogs) await db.habitLogs.clear().then(() => db.habitLogs.bulkAdd(b.habitLogs!));
     for (const t of WALLET_TABLES) {
-      const rows = b.wallet?.[t];
+      let rows = b.wallet?.[t];
+      // 舊備份的帳戶類型（郵局、銀行…）換成新的分類
+      if (t === 'accounts' && rows) rows = (rows as Account[]).map((a) => ({ ...a, kind: normalizeAccountKind(a.kind, a.currency) }));
       if (rows) await db.table(t).clear().then(() => db.table(t).bulkAdd(rows));
     }
   });

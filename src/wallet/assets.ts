@@ -1,4 +1,4 @@
-import { db, uid, type Account, type Balance, type Income, type Settings } from '../db';
+import { db, normalizeAccountKind, uid, type Account, type AccountKind, type Balance, type Income, type Settings, type Trade } from '../db';
 import { DEFAULT_USD_RATE, fmtTWD, round2 } from './money';
 
 /** 常用外幣；符號用於顯示金額 */
@@ -45,13 +45,53 @@ export async function setRate(code: string, rate: number, date: string): Promise
   else await db.settings.put({ ...cur, fxRates: { ...cur.fxRates, [code]: rate }, fxUpdated: date });
 }
 
-export const ACCOUNT_KINDS: Record<Account['kind'], string> = {
-  post: '郵局',
-  bank: '銀行',
-  cash: '現金',
-  broker: '證券交割戶',
-  other: '其他',
+export const ACCOUNT_KINDS: Record<AccountKind, string> = {
+  deposit: '綜合存款',
+  broker: '證券',
+  foreign: '外幣',
 };
+
+export const ACCOUNT_KIND_ORDER: AccountKind[] = ['deposit', 'broker', 'foreign'];
+
+/** 帳戶分類（舊資料可能還是郵局、銀行等舊類型） */
+export function accountKind(a: Pick<Account, 'kind' | 'currency'>): AccountKind {
+  return normalizeAccountKind(a.kind, a.currency);
+}
+
+/** 持股成本（平均成本 × 股數），date 之前（含）的交易 */
+export function holdingsCost(trades: Trade[], date?: string): number {
+  const pos = new Map<string, { shares: number; cost: number }>();
+  const list = [...trades]
+    .filter((t) => !date || t.date <= date)
+    .sort((a, b) => a.date.localeCompare(b.date) || (a.time ?? '').localeCompare(b.time ?? '') || a.createdAt - b.createdAt);
+  for (const t of list) {
+    const p = pos.get(t.symbol) ?? { shares: 0, cost: 0 };
+    if (t.side === 'buy') {
+      p.cost += t.price * t.shares + (t.fee ?? 0);
+      p.shares += t.shares;
+    } else {
+      const qty = Math.min(t.shares, p.shares);
+      const avg = p.shares ? p.cost / p.shares : 0;
+      p.cost -= avg * qty;
+      p.shares -= qty;
+    }
+    pos.set(t.symbol, p);
+  }
+  return round2([...pos.values()].reduce((a, p) => a + (p.shares > 0 ? p.cost : 0), 0));
+}
+
+/** 調整帳戶餘額：在最新一筆餘額上加減，日期不早於最新那筆 */
+export async function adjustBalance(accountId: string, delta: number, date: string): Promise<void> {
+  if (!delta) return;
+  const cur = balancesAt(await db.balances.where('accountId').equals(accountId).toArray()).get(accountId);
+  await db.balances.add({
+    id: uid(),
+    accountId,
+    amount: round2((cur?.amount ?? 0) + delta),
+    date: cur && cur.date > date ? cur.date : date,
+    createdAt: Date.now(),
+  });
+}
 
 export const INCOME_KINDS: Record<Income['kind'], string> = {
   salary: '薪資',

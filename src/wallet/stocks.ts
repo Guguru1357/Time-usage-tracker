@@ -1,18 +1,7 @@
-import { db, type Emotion, type Trade } from '../db';
+import { db, type Trade } from '../db';
+import { adjustBalance } from './assets';
 import { addDays, dayStart } from '../time';
 import { round2 } from './money';
-
-export const EMOTIONS: Record<Emotion, { label: string; hint: string }> = {
-  calm: { label: '平靜', hint: '照自己的節奏' },
-  fomo: { label: '怕錯過', hint: '看到大漲想追' },
-  fear: { label: '恐懼', hint: '怕跌、想先跑' },
-  greed: { label: '貪心', hint: '想多賺一點' },
-  revenge: { label: '想翻本', hint: '剛賠錢想拿回來' },
-  bored: { label: '無聊', hint: '沒事做想動一下' },
-  impulse: { label: '衝動', hint: '沒想太多' },
-};
-
-export const EMOTION_ORDER: Emotion[] = ['calm', 'fomo', 'fear', 'greed', 'revenge', 'bored', 'impulse'];
 
 export function tradeAmount(t: Trade): number {
   return t.price * t.shares;
@@ -64,37 +53,19 @@ export interface TradeReport {
   tradingDays: number;
   /** 定期定額的筆數 */
   dca: number;
-  /** 自己下單（非定期定額）中帶情緒的筆數 */
-  emotional: number;
-  /** 自己下單的筆數 */
-  manual: number;
-  /** 依心情統計（不含定期定額） */
-  emotions: Map<Emotion, { count: number; pnl: number; sells: number }>;
+  /** 期間內賣出的已實現損益合計 */
+  realized: number;
 }
 
 /** 期間 [from, to] 內的交易統計 */
 export function tradeReport(all: Trade[], from: string, to: string): TradeReport {
   const { realized } = analyzePositions(all);
-  const list = sortTrades(all).filter((t) => t.date >= from && t.date <= to);
-  const manualList = list.filter((t) => !t.dca);
-  const emotions = new Map<Emotion, { count: number; pnl: number; sells: number }>();
-  for (const t of manualList) {
-    const e = emotions.get(t.emotion) ?? { count: 0, pnl: 0, sells: 0 };
-    e.count++;
-    const r = realized.get(t.id);
-    if (r !== undefined) {
-      e.pnl = round2(e.pnl + r);
-      e.sells++;
-    }
-    emotions.set(t.emotion, e);
-  }
+  const list = all.filter((t) => t.date >= from && t.date <= to);
   return {
     count: list.length,
     tradingDays: new Set(list.map((t) => t.date)).size,
-    dca: list.length - manualList.length,
-    manual: manualList.length,
-    emotional: manualList.filter((t) => t.emotion !== 'calm').length,
-    emotions,
+    dca: list.filter((t) => t.dca).length,
+    realized: round2(list.reduce((a, t) => a + (realized.get(t.id) ?? 0), 0)),
   };
 }
 
@@ -116,6 +87,41 @@ export function dailyCounts(trades: Trade[], to: string, days: number): { date: 
   return Array.from({ length: days }, (_, i) => {
     const date = addDays(to, i - days + 1);
     return { date, count: perDay.get(date) ?? 0 };
+  });
+}
+
+// ---------- 與證券交割戶同步 ----------
+
+/** 這筆交易對交割戶的金額變動：買進付出（含手續費），賣出收入（扣手續費） */
+export function tradeCash(t: Pick<Trade, 'side' | 'price' | 'shares' | 'fee'>): number {
+  const gross = t.price * t.shares;
+  const fee = t.fee ?? 0;
+  return round2(t.side === 'buy' ? -(gross + fee) : gross - fee);
+}
+
+/**
+ * 儲存交易並同步帳戶餘額。
+ * 編輯時先把舊的金額還原，再套用新的，所以改價格、改帳戶或改成不同步都不會算錯。
+ */
+export async function saveTrade(t: Trade): Promise<void> {
+  await db.transaction('rw', db.trades, db.balances, async () => {
+    const prev = await db.trades.get(t.id);
+    if (prev?.accountId && prev.cash) await adjustBalance(prev.accountId, -prev.cash, t.date);
+    const next: Trade = { ...t, cash: undefined };
+    if (t.accountId) {
+      next.cash = tradeCash(t);
+      await adjustBalance(t.accountId, next.cash, t.date);
+    }
+    await db.trades.put(next);
+  });
+}
+
+export async function deleteTrade(id: string): Promise<void> {
+  await db.transaction('rw', db.trades, db.balances, async () => {
+    const t = await db.trades.get(id);
+    if (!t) return;
+    if (t.accountId && t.cash) await adjustBalance(t.accountId, -t.cash, t.date);
+    await db.trades.delete(id);
   });
 }
 

@@ -225,11 +225,13 @@ export interface GiftCard {
   log: GiftLog[];
 }
 
+export type AccountKind = 'deposit' | 'broker' | 'foreign';
+
 export interface Account {
   id: string;
   name: string;
-  /** 郵局、銀行、現金、證券交割戶… */
-  kind: 'bank' | 'post' | 'cash' | 'broker' | 'other';
+  /** 綜合存款（郵局、銀行、現金）、證券（交割戶）、外幣 */
+  kind: AccountKind;
   /** 幣別代碼，例如 USD；未設定為台幣 */
   currency?: string;
   order: number;
@@ -255,6 +257,7 @@ export interface Income {
   accountId?: string;
 }
 
+/** 舊版的下單心情（已不再使用，舊資料保留） */
 export type Emotion = 'calm' | 'fomo' | 'fear' | 'greed' | 'revenge' | 'bored' | 'impulse';
 
 export interface Trade {
@@ -270,13 +273,17 @@ export interface Trade {
   /** 股數（1 張 = 1000 股） */
   shares: number;
   fee?: number;
-  /** 當下心情；定期定額為自動扣款，固定記為平靜 */
-  emotion: Emotion;
+  /** 舊版欄位：下單心情（已不再使用） */
+  emotion?: Emotion;
   /** 定期定額（自動扣款買進） */
   dca?: boolean;
   /** 舊版欄位：是否照計畫（已不再使用） */
   planned?: boolean;
   reason?: string;
+  /** 同步到哪個帳戶（證券交割戶） */
+  accountId?: string;
+  /** 已經套用到該帳戶的金額變動（買進為負、賣出為正），編輯或刪除時用來還原 */
+  cash?: number;
   createdAt: number;
 }
 
@@ -374,6 +381,15 @@ export class TimeLedgerDB extends Dexie {
       .upgrade(async (tx) => {
         if ((await tx.table('expenseCats').count()) === 0) await tx.table('expenseCats').bulkAdd(defaultExpenseCats());
       });
+    // v5：帳戶分成綜合存款／證券／外幣
+    this.version(5).upgrade((tx) =>
+      tx
+        .table('accounts')
+        .toCollection()
+        .modify((a: { kind: string; currency?: string }) => {
+          a.kind = normalizeAccountKind(a.kind, a.currency);
+        }),
+    );
   }
 }
 
@@ -397,6 +413,14 @@ export function defaultHabits(activities: Activity[]): Habit[] {
     order: i,
     ...(activityId ? { activityId } : {}),
   }));
+}
+
+/** 舊版的帳戶類型（郵局、銀行、現金…）換成新的三種分類 */
+export function normalizeAccountKind(kind: string, currency?: string): AccountKind {
+  if (currency && currency !== 'TWD') return 'foreign';
+  if (kind === 'broker') return 'broker';
+  if (kind === 'foreign') return 'foreign';
+  return 'deposit';
 }
 
 /** 預設支出分類；顏色刻意用低彩度 */
