@@ -409,7 +409,7 @@ export function ExpenseSheet({ initial, cats, onClose, onSaved }: { initial: Par
             ))}
           </div>
         )}
-        {chosenOpt && <small className="muted">{chosenOpt.deducts ? `儲存後會${chosenOpt.hint}` : chosen === CASH ? '只標記，不扣任何餘額' : `${chosenOpt.hint ?? ''}：只標記，不扣餘額`}</small>}
+        {chosenOpt && <small className="muted">{chosenOpt.deducts ? `儲存後會${chosenOpt.hint}` : `${chosenOpt.hint ?? ''}：只標記，不扣餘額`}</small>}
         {chosen?.startsWith('pay:') && (
           <button
             className="text-btn left"

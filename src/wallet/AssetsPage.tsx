@@ -148,8 +148,9 @@ export function AssetsPage({ openIncome }: { openIncome?: number }) {
                       <span className="money-main">
                         <span className="money-title">{a.name}</span>
                         <span className="money-sub">
+                          {a.cash ? '錢包裡的現金 · ' : ''}
                           {cur !== 'TWD' ? `${currencyInfo(cur).name} · ` : ''}
-                          {b ? `${fmtDateLabel(b.date)} 更新` : '還沒輸入餘額'}
+                          {a.cash && b && b.amount < 0 ? '點這裡輸入錢包實際金額' : b ? `${fmtDateLabel(b.date)} 更新` : '還沒輸入餘額'}
                         </span>
                       </span>
                       <span className="money-amt">

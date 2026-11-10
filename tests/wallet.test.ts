@@ -200,9 +200,14 @@ describe('money', () => {
 
     await saveExpense({ ...e, amount: 200, payWith: 'cash' });
     expect(giftBalance((await db.giftCards.get('g7'))!)).toBe(1000);
+    // 現金：自動建立「現金」帳戶並扣款
+    const cash = (await db.accounts.toArray()).find((x) => x.cash)!;
+    expect(cash).toMatchObject({ name: '現金', kind: 'deposit' });
+    expect(balancesAt(await db.balances.toArray()).get(cash.id)!.amount).toBe(-200);
     await saveExpense({ ...e, amount: 120, payWith: `acct:${post}` });
     await deleteExpense(e.id);
     expect(await bal()).toBe(10_000);
+    expect(balancesAt(await db.balances.toArray()).get(cash.id)!.amount).toBe(0);
     expect((await db.settings.get('main'))?.lastPayWith).toBe(`acct:${post}`);
     clock.mockRestore();
   });

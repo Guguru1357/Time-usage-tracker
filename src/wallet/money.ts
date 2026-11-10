@@ -4,7 +4,9 @@ import { addDays, dayStart, toDateKey } from '../time';
 export const DEFAULT_USD_RATE = 32;
 
 export function fmtTWD(n: number): string {
-  return `NT$${Math.round(n).toLocaleString('zh-TW')}`;
+  const v = Math.round(n);
+  // 負數顯示成「−NT$120」
+  return `${v < 0 ? '−' : ''}NT$${Math.abs(v).toLocaleString('zh-TW')}`;
 }
 
 export function fmtNum(n: number): string {

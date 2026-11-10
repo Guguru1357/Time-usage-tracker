@@ -245,6 +245,8 @@ export interface Account {
   kind: AccountKind;
   /** 幣別代碼，例如 USD；未設定為台幣 */
   currency?: string;
+  /** 「現金」帳戶（錢包裡的現金）；記帳選現金時從這裡扣 */
+  cash?: boolean;
   order: number;
   archived?: boolean;
 }

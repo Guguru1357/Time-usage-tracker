@@ -16,9 +16,9 @@ export interface PayOption {
 /** 可選的付款方式：現金、綜合存款帳戶、禮券（有餘額的金額型）、信用卡／電子支付 */
 export async function payOptions(): Promise<PayOption[]> {
   const [accounts, gifts, settings] = await Promise.all([db.accounts.orderBy('order').toArray(), db.giftCards.toArray(), db.settings.get('main')]);
-  const opts: PayOption[] = [{ value: CASH, label: '現金', deducts: false }];
+  const opts: PayOption[] = [{ value: CASH, label: '現金', deducts: true, hint: '從「現金」帳戶扣' }];
   for (const a of accounts) {
-    if (a.archived || accountKind(a) !== 'deposit' || currencyOf(a) !== 'TWD') continue;
+    if (a.archived || a.cash || accountKind(a) !== 'deposit' || currencyOf(a) !== 'TWD') continue;
     opts.push({ value: `acct:${a.id}`, label: a.name, deducts: true, hint: '從帳戶餘額扣' });
   }
   for (const m of settings?.payMethods ?? []) opts.push({ value: `pay:${m.id}`, label: m.name, deducts: false, hint: m.kind === 'card' ? '信用卡' : '電子支付' });
@@ -48,6 +48,20 @@ export async function removePayMethod(id: string): Promise<void> {
   await db.settings.put({ ...cur, payMethods: (cur.payMethods ?? []).filter((m) => m.id !== id) });
 }
 
+/** 「現金」帳戶的 id；還沒有的話建立一個（綜合存款、台幣），刪除過的會重新啟用 */
+export async function ensureCashAccount(): Promise<string> {
+  const all = await db.accounts.toArray();
+  const found = all.find((a) => a.cash);
+  if (found) {
+    if (found.archived) await db.accounts.update(found.id, { archived: false });
+    return found.id;
+  }
+  const id = uid();
+  const max = all.reduce((m, a) => Math.max(m, a.order), -1);
+  await db.accounts.add({ id, name: '現金', kind: 'deposit', cash: true, order: max + 1 });
+  return id;
+}
+
 /** 還原這筆支出之前扣掉的錢 */
 async function revert(e: Expense | undefined, date: string): Promise<void> {
   const d = e?.deducted;
@@ -61,6 +75,11 @@ async function revert(e: Expense | undefined, date: string): Promise<void> {
 
 /** 依付款方式扣錢，回傳扣款紀錄 */
 async function deduct(e: Expense): Promise<Expense['deducted']> {
+  if (e.payWith === CASH) {
+    const id = await ensureCashAccount();
+    await adjustBalance(id, -e.amount, e.date);
+    return { kind: 'acct', id, amount: e.amount };
+  }
   const [kind, id] = (e.payWith ?? '').split(':');
   if (kind === 'acct' && id) {
     await adjustBalance(id, -e.amount, e.date);
@@ -81,7 +100,7 @@ async function deduct(e: Expense): Promise<Expense['deducted']> {
  * 編輯時先還原舊的扣款再重新扣，所以改金額、改付款方式都不會算錯。
  */
 export async function saveExpense(data: Omit<Expense, 'id' | 'createdAt' | 'deducted'> & { id?: string }): Promise<Expense> {
-  const tables = [db.expenses, db.quickItems, db.balances, db.giftCards, db.settings];
+  const tables = [db.expenses, db.quickItems, db.balances, db.giftCards, db.settings, db.accounts];
   return db.transaction('rw', tables, async () => {
     const existing = data.id ? await db.expenses.get(data.id) : undefined;
     const e: Expense = {
