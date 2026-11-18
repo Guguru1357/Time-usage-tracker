@@ -100,6 +100,16 @@ describe('assets', () => {
     expect(totalAt(accounts, balances, twdOnly).twd).toBe(110_000);
   });
 
+  it('a manually entered balance always becomes the current one, even if a later-dated entry exists', async () => {
+    const broker = await saveAccount({ name: '元大交割戶', kind: 'broker' });
+    await setBalance(broker, 100_000, '2026-11-18');
+    // 記了一筆日期較晚（11/20）的交易扣款
+    await saveTrade({ id: 'late', date: '2026-11-20', side: 'buy', symbol: '2603', price: 100, shares: 1000, accountId: broker, createdAt: 1 });
+    // 今天（11/18）照券商 App 填實際餘額
+    await setBalance(broker, 88_000, '2026-11-18');
+    expect(balancesAt(await db.balances.toArray()).get(broker)!.amount).toBe(88_000);
+  });
+
   it('converts foreign currency accounts and reports currencies without a rate', async () => {
     const usd = await saveAccount({ name: '國泰 美元', kind: 'foreign', currency: 'USD' });
     const jpy = await saveAccount({ name: '日圓帳戶', kind: 'foreign', currency: 'JPY' });

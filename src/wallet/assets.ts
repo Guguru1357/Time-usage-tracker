@@ -140,8 +140,20 @@ export async function saveAccount(a: Omit<Account, 'id' | 'order'> & { id?: stri
   return id;
 }
 
+/**
+ * 手動輸入帳戶目前的實際餘額。
+ * 這筆一定成為最新的餘額：如果已經有日期更晚的紀錄（例如記了未來日期的交易），就沿用那個日期，
+ * 不然手動填的實際金額會被那筆蓋掉。
+ */
 export async function setBalance(accountId: string, amount: number, date: string): Promise<void> {
-  await db.balances.add({ id: uid(), accountId, amount: round2(amount), date, createdAt: nextStamp(await latestOf(accountId)) });
+  const latest = await latestOf(accountId);
+  await db.balances.add({
+    id: uid(),
+    accountId,
+    amount: round2(amount),
+    date: latest && latest.date > date ? latest.date : date,
+    createdAt: nextStamp(latest),
+  });
 }
 
 /** 新增收入；指定帳戶時一併把金額加到該帳戶餘額 */

@@ -2298,3 +2298,48 @@ h3 {
   margin: 6px 0 0;
   padding-left: 18px;
 }
+
+.check-row .check-status {
+  font-size: 13px;
+  color: var(--muted);
+  text-align: right;
+  max-width: 40%;
+}
+.check-row.st-ok .check-status {
+  color: var(--ok);
+}
+.check-row.st-mismatch {
+  background: var(--warn-bg);
+}
+.check-row.st-mismatch .check-status {
+  color: var(--warn-text);
+  font-weight: 600;
+}
+.mode-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mode-option {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  font-size: 15px;
+}
+.mode-option.selected {
+  border-color: var(--accent);
+  background: var(--surface-2);
+}
+.mode-option input {
+  margin-top: 4px;
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+}
+.mode-option span {
+  display: flex;
+  flex-direction: column;
+}
