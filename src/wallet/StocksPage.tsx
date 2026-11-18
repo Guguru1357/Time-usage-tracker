@@ -10,6 +10,7 @@ import { useSettings } from '../hooks';
 import { DEFAULT_USD_RATE } from './money';
 import { analyzePositions, dailyCounts, deleteTrade, markTradeDay, reportedTradeDays, saveTrade, sortTrades, tradeAmount, tradeCash, tradeFx, tradeReport, weeklyCounts } from './stocks';
 import { BarChart, Sheet, numOrUndef, useToast } from './ui';
+import { TradeImportSheet } from './TradeImportSheet';
 
 const PERIOD_DAYS = 30;
 
@@ -27,6 +28,7 @@ export function StocksPage({ focus }: { focus?: { date: string; action?: 'noTrad
   const trades = useLiveQuery(() => db.trades.toArray()) ?? [];
   const reported = useLiveQuery(() => reportedTradeDays()) ?? new Set<string>();
   const [editing, setEditing] = useState<Partial<Trade> | null>(null);
+  const [importing, setImporting] = useState(false);
   const [countMode, setCountMode] = useState<'day' | 'week'>('day');
   const [, say, toast] = useToast();
   const today = todayKey();
@@ -92,6 +94,10 @@ export function StocksPage({ focus }: { focus?: { date: string; action?: 'noTrad
           )}
         </div>
       )}
+
+      <button className="btn block import-btn" onClick={() => setImporting(true)}>
+        📥 從券商截圖匯入交易
+      </button>
 
       <h3>近 30 天的交易習慣</h3>
       <div className="stock-stats">
@@ -180,6 +186,7 @@ export function StocksPage({ focus }: { focus?: { date: string; action?: 'noTrad
                           ? `US$${t.price} × ${fmtNum4(t.shares)} 股 · 匯率 ${tradeFx(t)}`
                           : `${t.price} × ${t.shares % 1000 === 0 ? `${t.shares / 1000} 張` : `${fmtNum(t.shares)} 股`}`}
                         {t.dca ? ' · 定期定額' : ''}
+                        {t.source === 'opening' ? ' · 期初持股' : ''}
                       </span>
                     </span>
                     <span className="money-amt">
@@ -198,6 +205,7 @@ export function StocksPage({ focus }: { focus?: { date: string; action?: 'noTrad
       <button className="fab" onClick={() => setEditing({ date: today })} aria-label="記一筆交易">
         <IconPlus size={26} />
       </button>
+      {importing && <TradeImportSheet onClose={() => setImporting(false)} onDone={say} />}
       {editing && <TradeSheet initial={editing} trades={trades} onClose={() => setEditing(null)} onSaved={say} />}
       {toast}
     </>
@@ -262,7 +270,6 @@ function TradeSheet({ initial, trades, onClose, onSaved }: { initial: Partial<Tr
       price: p,
       shares,
       fee: numOrUndef(fee),
-      ...(initial.emotion ? { emotion: initial.emotion } : {}),
       dca: dca || undefined,
       reason: reason.trim() || undefined,
       accountId: syncTo,

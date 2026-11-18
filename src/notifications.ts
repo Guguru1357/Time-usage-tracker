@@ -209,7 +209,7 @@ async function doReschedule(now: number): Promise<number> {
     toSchedule.push({
       id: TRADE_ID_BASE + Number(date.replaceAll('-', '')),
       title: '記錄今天的股票進出',
-      body: '有交易就記下來（含當時心情）；沒有交易按「今天沒交易」',
+      body: '有交易就記下來；沒有交易按「今天沒交易」',
       channelId: MONEY_CHANNEL_ID,
       actionTypeId: TRADE_ACTION_TYPE,
       schedule: { at: new Date(at), allowWhileIdle: true },

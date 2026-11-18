@@ -2264,3 +2264,37 @@ h3 {
 .free-chips {
   margin-top: -6px;
 }
+
+.import-btn {
+  margin: 12px 0 0;
+}
+.import-steps {
+  margin: 0;
+  padding-left: 22px;
+  font-size: 16px;
+  line-height: 1.6;
+}
+.import-steps li {
+  margin-bottom: 12px;
+}
+.import-steps .btn {
+  margin-top: 8px;
+}
+.prompt-box {
+  width: 100%;
+  min-height: 160px;
+  margin-top: 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  padding: 10px;
+  font: inherit;
+  font-size: 13px;
+}
+.import-preview p {
+  margin: 4px 0 10px;
+}
+.import-preview .warn ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}

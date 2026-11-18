@@ -286,9 +286,6 @@ export interface Income {
   accountId?: string;
 }
 
-/** 舊版的下單心情（已不再使用，舊資料保留） */
-export type Emotion = 'calm' | 'fomo' | 'fear' | 'greed' | 'revenge' | 'bored' | 'impulse';
-
 export interface Trade {
   id: string;
   date: string;
@@ -308,13 +305,11 @@ export interface Trade {
   fee?: number;
   /** 美股：當時的匯率（1 美元 = 多少台幣），交割戶以台幣扣款 */
   fx?: number;
-  /** 舊版欄位：下單心情（已不再使用） */
-  emotion?: Emotion;
   /** 定期定額（自動扣款買進） */
   dca?: boolean;
-  /** 舊版欄位：是否照計畫（已不再使用） */
-  planned?: boolean;
   reason?: string;
+  /** 從檔案匯入（import）或用庫存補的期初持股（opening） */
+  source?: 'import' | 'opening';
   /** 同步到哪個帳戶（證券交割戶） */
   accountId?: string;
   /** 已經套用到該帳戶的金額變動（買進為負、賣出為正），編輯或刪除時用來還原 */
@@ -423,6 +418,16 @@ export class TimeLedgerDB extends Dexie {
       });
     // v6：帳戶之間轉帳
     this.version(6).stores({ transfers: 'id, date' });
+    // v7：拿掉股票的下單心情與「是否照計畫」
+    this.version(7).upgrade((tx) =>
+      tx
+        .table('trades')
+        .toCollection()
+        .modify((t: Record<string, unknown>) => {
+          delete t.emotion;
+          delete t.planned;
+        }),
+    );
     // v5：帳戶分成綜合存款／證券／外幣
     this.version(5).upgrade((tx) =>
       tx
