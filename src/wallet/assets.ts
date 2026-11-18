@@ -58,7 +58,7 @@ export function accountKind(a: Pick<Account, 'kind' | 'currency'>): AccountKind 
   return normalizeAccountKind(a.kind, a.currency);
 }
 
-export { holdingsCost } from './positions';
+export { holdingsCost, latestSnapshot } from './positions';
 
 /**
  * 新餘額紀錄的建立時間：一定比這個帳戶最新的一筆晚。

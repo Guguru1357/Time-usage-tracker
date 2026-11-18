@@ -2,7 +2,7 @@ import { db, type Trade } from '../db';
 import { adjustBalance } from './assets';
 import { analyzePositions, tradeCash } from './positions';
 
-export { analyzePositions, holdingsCost, isUS, sortTrades, tradeAmount, tradeCash, tradeFx, type Holding } from './positions';
+export { analyzePositions, currentHoldings, holdingsCost, isUS, latestSnapshot, sortTrades, tradeAmount, tradeCash, tradeFx, type Holding } from './positions';
 import { addDays, dayStart } from '../time';
 import { round2 } from './money';
 

@@ -48,10 +48,9 @@ export function TradeImportSheet({ onClose, onDone }: { onClose: () => void; onD
   // 檔案開始的月份之前已經持有的股數，跨月的買賣才核對得起來
   const prior = useMemo(() => (parsed && existing ? priorPositions(existing, parsed, mode) : new Map<string, number>()), [parsed, existing, mode]);
   const plan: ImportPlan | null = useMemo(
-    () => (parsed ? planImport(parsed, settings.usdRate ?? DEFAULT_USD_RATE, Date.now(), prior) : null),
-    [parsed, prior, settings.usdRate],
+    () => (parsed ? planImport(parsed, settings.usdRate ?? DEFAULT_USD_RATE) : null),
+    [parsed, settings.usdRate],
   );
-  const [addOpening, setAddOpening] = useState(false);
   const [error, setError] = useState('');
   const [copied, setCopied] = useState('');
   const [fallbackText, setFallbackText] = useState('');
@@ -93,19 +92,19 @@ export function TradeImportSheet({ onClose, onDone }: { onClose: () => void; onD
   const summary = parsed ? summarizeBySymbol(parsed, prior) : [];
   const report = mismatchReport(summary);
   const bad = summary.filter((x) => x.status === 'mismatch').length;
-  const openingCount = plan?.opening.length ?? 0;
 
   async function confirmImport() {
     if (!plan) return;
     const what = mode === 'all' ? 'App 裡所有的股票交易' : mode === 'months' ? `${months.map(monthText).join('、')}的所有股票交易` : '';
-    if (bad && !confirm(`有 ${bad} 檔交易和庫存對不上，確定還是要匯入嗎？`)) return;
+    if (bad && !confirm(`有 ${bad} 檔的交易紀錄和庫存對不上（可能有讀錯或漏列的交易）。持股仍會以庫存截圖為準，確定要匯入嗎？`)) return;
     if (what && !confirm(`會刪除${what}，換成這個檔案的紀錄。確定嗎？`)) return;
-    const r = await applyImport(plan, { mode, addOpening });
+    const r = await applyImport(plan, { mode });
     const bal = numOrUndef(brokerBal);
     if (chosenBroker && bal !== undefined) await setBalance(chosenBroker, bal, todayKey());
     const broker = brokers.find((a) => a.id === chosenBroker);
     onDone(
       `已匯入 ${r.added} 筆${r.skipped ? `（${r.skipped} 筆重複略過）` : ''}${r.removed ? `，取代舊紀錄 ${r.removed} 筆` : ''}` +
+        (r.snapshot ? '；持股已更新為庫存截圖' : '') +
         (broker && bal !== undefined ? `；${broker.name}餘額更新為 ${fmtTWD(bal)}` : ''),
     );
     onClose();
@@ -120,7 +119,7 @@ export function TradeImportSheet({ onClose, onDone }: { onClose: () => void; onD
           <button className="btn ghost" onClick={onClose}>
             取消
           </button>
-          <button className="btn primary" disabled={!plan || (!plan.trades.length && !(addOpening && openingCount))} onClick={confirmImport}>
+          <button className="btn primary" disabled={!plan || (!plan.trades.length && !plan.holdings)} onClick={confirmImport}>
             匯入
           </button>
         </>
@@ -166,6 +165,11 @@ export function TradeImportSheet({ onClose, onDone }: { onClose: () => void; onD
             {plan.from && plan.to && `（${fmtDateLabel(plan.from)} ～ ${fmtDateLabel(plan.to)}）`}
             {parsed.holdingsProvided ? (parsed.holdings.length ? `，庫存 ${parsed.holdings.length} 檔` : '，庫存：目前沒有持股') : '，沒有庫存資料'}
           </p>
+          <div className={`holding-note${plan.holdings ? '' : ' missing'}`}>
+            {plan.holdings
+              ? `持股：以這次的庫存截圖為準（${plan.holdings.length ? `${plan.holdings.length} 檔` : '目前沒有持股'}）`
+              : '這個檔案沒有庫存資料，持股不會更新。建議連庫存一起截圖。'}
+          </div>
           {parsed.errors.length > 0 && (
             <div className="warn">
               有 {parsed.errors.length} 筆看不懂，會略過：
@@ -177,7 +181,7 @@ export function TradeImportSheet({ onClose, onDone }: { onClose: () => void; onD
             </div>
           )}
 
-          <div className="section-label">每檔核對（月初持有 ＋ 買 − 賣，和庫存比）</div>
+          <div className="section-label">交易紀錄核對（只是參考：檢查 Claude 有沒有讀錯或漏列）</div>
           <div className="money-list">
             {summary.map((x) => (
               <div key={`${x.market}${x.symbol}`} className={`money-row static check-row st-${x.status}`}>
@@ -201,23 +205,13 @@ export function TradeImportSheet({ onClose, onDone }: { onClose: () => void; onD
           )}
           {report && (
             <>
-              <p className="muted small">對不上的通常是 Claude 讀錯或漏了截圖。可以把清單貼回 Claude App，請它對照截圖修正後重做一次檔案。</p>
+              <p className="muted small">持股不受影響（以庫存為準）；對不上代表交易紀錄可能有讀錯或漏列。想讓過程紀錄更正確，可以把清單貼回 Claude App 請它對照截圖修正。</p>
               <button className="btn block" onClick={() => copy(report, 'report')}>
                 {copied === 'report' ? '✓ 已複製，貼回 Claude App' : '複製不一致清單給 Claude'}
               </button>
             </>
           )}
-          {openingCount > 0 && (
-            <label className="toggle-row">
-              <input type="checkbox" checked={addOpening} onChange={(e) => setAddOpening(e.target.checked)} />
-              <span>
-                用庫存補上期初持股（{openingCount} 檔）
-                <small className="muted">只有確定庫存截圖正確、而且是更早之前買的股票才勾</small>
-              </span>
-            </label>
-          )}
-
-          <div className="section-label">要取代哪些舊紀錄</div>
+          <div className="section-label">要取代哪些舊的交易紀錄</div>
           <div className="mode-list">
             {(
               [

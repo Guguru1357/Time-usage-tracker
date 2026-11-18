@@ -8,7 +8,7 @@ import { fmtNum, fmtTWD, round2 } from './money';
 import { accountKind, currencyOf, fmtMoney } from './assets';
 import { useSettings } from '../hooks';
 import { DEFAULT_USD_RATE } from './money';
-import { analyzePositions, dailyCounts, deleteTrade, markTradeDay, reportedTradeDays, saveTrade, sortTrades, tradeAmount, tradeCash, tradeFx, tradeReport, weeklyCounts } from './stocks';
+import { analyzePositions, currentHoldings, dailyCounts, latestSnapshot, deleteTrade, markTradeDay, reportedTradeDays, saveTrade, sortTrades, tradeAmount, tradeCash, tradeFx, tradeReport, weeklyCounts } from './stocks';
 import { BarChart, Sheet, numOrUndef, useToast } from './ui';
 import { TradeImportSheet } from './TradeImportSheet';
 
@@ -26,6 +26,9 @@ function pnlText(v: number): string {
 
 export function StocksPage({ focus }: { focus?: { date: string; action?: 'noTrade' | 'closed'; nonce: number } }) {
   const trades = useLiveQuery(() => db.trades.toArray()) ?? [];
+  const pageSettings = useSettings();
+  // 持股以最新的庫存截圖為準；交易紀錄只是過程
+  const snap = latestSnapshot(useLiveQuery(() => db.holdingSnapshots.toArray()));
   const reported = useLiveQuery(() => reportedTradeDays()) ?? new Set<string>();
   const [editing, setEditing] = useState<Partial<Trade> | null>(null);
   const [importing, setImporting] = useState(false);
@@ -48,7 +51,8 @@ export function StocksPage({ focus }: { focus?: { date: string; action?: 'noTrad
 
   const from = addDays(today, -(PERIOD_DAYS - 1));
   const report = tradeReport(trades, from, today);
-  const { holdings, realized } = analyzePositions(trades);
+  const { realized } = analyzePositions(trades);
+  const holdings = currentHoldings(trades, snap, pageSettings.usdRate ?? DEFAULT_USD_RATE);
   // 12 週的日期標籤太擠，隔週顯示一次（最後一週一定顯示）
   // 近 30 天每日筆數；日期標籤每 5 天顯示一次，最後一天一定顯示
   const daily = dailyCounts(trades, today, PERIOD_DAYS).map((d, i) => ({
@@ -135,7 +139,7 @@ export function StocksPage({ focus }: { focus?: { date: string; action?: 'noTrad
 
       {holdings.length > 0 && (
         <>
-          <h3>目前持股（平均成本）</h3>
+          <h3>目前持股（平均成本）{snap ? `・依 ${fmtDateLabel(snap.date)} 庫存截圖` : ''}</h3>
           <div className="money-list">
             {holdings.map((h) => (
               <div key={`${h.market}${h.symbol}`} className="money-row static">

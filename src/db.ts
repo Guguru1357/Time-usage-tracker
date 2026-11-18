@@ -286,6 +286,15 @@ export interface Income {
   accountId?: string;
 }
 
+/** 庫存截圖：某個時間點「現在有的」持股，持股以這個為準 */
+export interface HoldingSnapshot {
+  id: string;
+  /** 截圖（匯入）的日期 */
+  date: string;
+  createdAt: number;
+  items: { market: 'TW' | 'US'; symbol: string; name?: string; shares: number; avgCost?: number }[];
+}
+
 export interface Trade {
   id: string;
   date: string;
@@ -370,6 +379,7 @@ export class TimeLedgerDB extends Dexie {
   incomes!: EntityTable<Income, 'id'>;
   trades!: EntityTable<Trade, 'id'>;
   transfers!: EntityTable<Transfer, 'id'>;
+  holdingSnapshots!: EntityTable<HoldingSnapshot, 'id'>;
 
   constructor(name = 'time-ledger') {
     super(name);
@@ -418,6 +428,8 @@ export class TimeLedgerDB extends Dexie {
       });
     // v6：帳戶之間轉帳
     this.version(6).stores({ transfers: 'id, date' });
+    // v8：庫存截圖（持股以庫存為準，交易紀錄只是過程）
+    this.version(8).stores({ holdingSnapshots: 'id, date' });
     // v7：拿掉股票的下單心情與「是否照計畫」
     this.version(7).upgrade((tx) =>
       tx

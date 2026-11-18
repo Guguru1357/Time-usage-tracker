@@ -10,6 +10,7 @@ import {
   CURRENCIES,
   accountKind,
   holdingsCost,
+  latestSnapshot,
   INCOME_KINDS,
   addIncome,
   balancesAt,
@@ -46,6 +47,8 @@ export function AssetsPage({ openIncome }: { openIncome?: number }) {
   const balances = useLiveQuery(() => db.balances.toArray()) ?? [];
   const incomes = useLiveQuery(() => db.incomes.orderBy('date').reverse().toArray()) ?? [];
   const trades = useLiveQuery(() => db.trades.toArray()) ?? [];
+  // 股票持股以最新的庫存截圖為準
+  const snap = latestSnapshot(useLiveQuery(() => db.holdingSnapshots.toArray()));
   const transfers = useLiveQuery(() => db.transfers.orderBy('date').reverse().toArray()) ?? [];
   const [transfer, setTransfer] = useState<Partial<Transfer> | null>(null);
   const [editAccount, setEditAccount] = useState<Partial<Account> | null>(null);
@@ -65,10 +68,11 @@ export function AssetsPage({ openIncome }: { openIncome?: number }) {
   const month = today.slice(0, 7);
   // 總資產 = 各帳戶（換算台幣）＋ 股票持股成本
   const totals = totalAt(accounts, balances, rates);
-  const stocks = holdingsCost(trades);
+  const usdRate = rates('USD') ?? 32;
+  const stocks = holdingsCost(trades, undefined, snap, usdRate);
   const total = totals.twd + stocks;
   const lastMonthEnd = monthRange(shiftMonth(month, -1)).to;
-  const prevTotal = totalAt(accounts, balances, rates, lastMonthEnd).twd + holdingsCost(trades, lastMonthEnd);
+  const prevTotal = totalAt(accounts, balances, rates, lastMonthEnd).twd + holdingsCost(trades, lastMonthEnd, snap, usdRate);
   // 用到的外幣（台幣以外）
   const foreign = [...new Set(accounts.map(currencyOf))].filter((c) => c !== 'TWD');
   const twdOf = (a: Account) => {
@@ -84,7 +88,7 @@ export function AssetsPage({ openIncome }: { openIncome?: number }) {
     return {
       label: `${Number(m.slice(0, 4))}/${Number(m.slice(5))}`,
       short: `${Number(m.slice(5))}`,
-      value: totalAt(accounts, balances, rates, end).twd + holdingsCost(trades, end),
+      value: totalAt(accounts, balances, rates, end).twd + holdingsCost(trades, end, snap, usdRate),
     };
   });
 
@@ -164,7 +168,7 @@ export function AssetsPage({ openIncome }: { openIncome?: number }) {
                   <div className="money-row static">
                     <span className="money-main">
                       <span className="money-title">股票持股</span>
-                      <span className="money-sub">以平均成本計，在「股票」頁記錄買賣</span>
+                      <span className="money-sub">{snap ? `依 ${fmtDateLabel(snap.date)} 庫存截圖，以成本計` : "以成本計（匯入庫存截圖後以截圖為準）"}</span>
                     </span>
                     <span className="money-amt">{fmtTWD(stocks)}</span>
                   </div>

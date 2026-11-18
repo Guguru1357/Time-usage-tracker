@@ -1,5 +1,5 @@
-import { db, uid, type Trade } from '../db';
-import { addDays } from '../time';
+import { db, uid, type HoldingSnapshot, type Trade } from '../db';
+import { todayKey } from '../time';
 import { DEFAULT_USD_RATE, round2 } from './money';
 import { analyzePositions, sortTrades } from './positions';
 
@@ -166,23 +166,10 @@ function toTrade(r: ImportRow, now: number, usdRate: number): Trade {
   };
 }
 
-export interface HoldingCheck {
-  market: 'TW' | 'US';
-  symbol: string;
-  name?: string;
-  /** 截圖上的庫存 */
-  expected: number;
-  /** 匯入的交易算出來的股數 */
-  computed: number;
-  avgCost?: number;
-}
-
 export interface ImportPlan {
   trades: Trade[];
-  /** 截圖庫存和交易算出來不一樣的股票 */
-  checks: HoldingCheck[];
-  /** 用庫存補的期初持股（交易紀錄沒涵蓋到的部分） */
-  opening: Trade[];
+  /** 庫存截圖；檔案沒有 holdings 欄位時為 undefined */
+  holdings?: ImportHolding[];
   from?: string;
   to?: string;
 }
@@ -205,51 +192,15 @@ export function priorPositions(existing: Trade[], parsed: ParsedImport, mode: Re
   return new Map(analyzePositions(before).holdings.map((h) => [posKey(h.market, h.symbol), h.shares]));
 }
 
-/**
- * 依匯入檔準備要寫入的交易。
- * 截圖通常只有最近幾個月，所以庫存比「月初持有＋交易」多時，可以在最早一筆交易的前一天補一筆「期初持股」。
- */
-export function planImport(parsed: ParsedImport, usdRate = DEFAULT_USD_RATE, now = Date.now(), prior: Positions = new Map()): ImportPlan {
+/** 依匯入檔準備要寫入的交易與庫存截圖 */
+export function planImport(parsed: ParsedImport, usdRate = DEFAULT_USD_RATE, now = Date.now()): ImportPlan {
   const trades = sortTrades(parsed.rows.map((r) => toTrade(r, now, usdRate)));
-  const from = trades[0]?.date;
-  const to = trades[trades.length - 1]?.date;
-  const computed = analyzePositions(trades).holdings;
-  const key = posKey;
-  const have = new Map(computed.map((h) => [key(h.market, h.symbol), h.shares]));
-
-  const checks: HoldingCheck[] = [];
-  const opening: Trade[] = [];
-  const seen = new Set<string>();
-  for (const h of parsed.holdings) {
-    const k = key(h.market, h.symbol);
-    seen.add(k);
-    const c = round2((have.get(k) ?? 0) + (prior.get(k) ?? 0));
-    if (Math.abs(c - h.shares) < 1e-6) continue;
-    checks.push({ market: h.market, symbol: h.symbol, name: h.name, expected: h.shares, computed: c, avgCost: h.avgCost });
-    if (h.shares > c && h.avgCost && h.avgCost > 0) {
-      opening.push({
-        id: uid(),
-        date: from ? addDays(from, -1) : '2000-01-01',
-        side: 'buy',
-        market: h.market === 'US' ? 'US' : undefined,
-        symbol: h.symbol,
-        name: h.name,
-        price: h.avgCost,
-        shares: round2(h.shares - c),
-        fx: h.market === 'US' ? usdRate : undefined,
-        reason: '期初持股（依庫存截圖補上）',
-        source: 'opening',
-        createdAt: now - 1,
-      });
-    }
-  }
-  // 有提供庫存時：交易算出還有、但庫存截圖沒有的股票，也提醒
-  if (parsed.holdingsProvided) {
-    for (const h of computed) {
-      if (!seen.has(key(h.market, h.symbol))) checks.push({ market: h.market, symbol: h.symbol, name: h.name, expected: 0, computed: h.shares });
-    }
-  }
-  return { trades, checks, opening, from, to };
+  return {
+    trades,
+    holdings: parsed.holdingsProvided ? parsed.holdings : undefined,
+    from: trades[0]?.date,
+    to: trades[trades.length - 1]?.date,
+  };
 }
 
 export interface SymbolSummary {
@@ -350,8 +301,6 @@ export type ReplaceMode = 'months' | 'all' | 'append';
 
 export interface ApplyOptions {
   mode: ReplaceMode;
-  /** 加入期初持股 */
-  addOpening: boolean;
 }
 
 /** 檔案涵蓋的月份（YYYY-MM），由舊到新 */
@@ -360,13 +309,17 @@ export function monthsOf(plan: ImportPlan): string[] {
 }
 
 /**
- * 寫入匯入的交易。
+ * 寫入匯入的交易，並把庫存截圖存成目前持股。
  * 不同步任何帳戶餘額，刪掉的舊交易也不還原：過去的交易早就反映在目前的交割戶餘額裡，
  * 匯入後請照券商 App 更新一次餘額。
  * 加入時一律略過和留下來的紀錄完全相同的交易（日期、代號、買賣、價格、股數都一樣）。
  */
-export async function applyImport(plan: ImportPlan, opts: ApplyOptions): Promise<{ added: number; skipped: number; removed: number }> {
-  return db.transaction('rw', db.trades, async () => {
+export async function applyImport(
+  plan: ImportPlan,
+  opts: ApplyOptions,
+  date = todayKey(),
+): Promise<{ added: number; skipped: number; removed: number; snapshot: boolean }> {
+  return db.transaction('rw', db.trades, db.holdingSnapshots, async () => {
     const all = await db.trades.toArray();
     const months = new Set(monthsOf(plan));
     const remove = opts.mode === 'all' ? all : opts.mode === 'months' ? all.filter((t) => months.has(t.date.slice(0, 7))) : [];
@@ -376,16 +329,27 @@ export async function applyImport(plan: ImportPlan, opts: ApplyOptions): Promise
 
     const sig = (t: Trade) => [t.date, t.market ?? 'TW', t.symbol, t.side, t.price, t.shares].join('|');
     const have = new Set(kept.map(sig));
-    const list = [...(opts.addOpening ? plan.opening : []), ...plan.trades];
-    const toAdd = list.filter((t) => !have.has(sig(t)));
+    const toAdd = plan.trades.filter((t) => !have.has(sig(t)));
     await db.trades.bulkAdd(toAdd);
-    return { added: toAdd.length, skipped: list.length - toAdd.length, removed: remove.length };
+    // 庫存截圖是「現在有的」持股，之後的持股以它為準
+    if (plan.holdings) {
+      const snap: HoldingSnapshot = {
+        id: uid(),
+        date,
+        createdAt: Date.now(),
+        items: plan.holdings.map((h) => ({ market: h.market, symbol: h.symbol, name: h.name, shares: h.shares, avgCost: h.avgCost })),
+      };
+      await db.holdingSnapshots.put(snap);
+    }
+    return { added: toAdd.length, skipped: plan.trades.length - toAdd.length, removed: remove.length, snapshot: !!plan.holdings };
   });
 }
 
 /** 複製給 Claude 的說明：連同截圖一起貼上，請 Claude 產生匯入檔 */
 export const CLAUDE_PROMPT = `請幫我把附上的券商 App 截圖整理成一個 JSON 檔，讓我匯入「時間記帳」App。
-截圖有兩種：「交易明細／成交回報」（過去的買賣）和「庫存」（現在還持有的股票）。
+截圖有兩種，用途不同：
+- 「交易明細／成交回報」：買賣的「過程」，我拿來檢視自己的操作。
+- 「庫存」：「現在有的」股票。App 的持股完全以庫存為準，不會用交易去推算。
 
 【最重要的規則】
 1. trades 只能來自「交易明細」截圖，逐筆照抄，不要合併、不要省略。

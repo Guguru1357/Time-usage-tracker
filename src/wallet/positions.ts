@@ -1,4 +1,4 @@
-import type { Trade } from '../db';
+import type { HoldingSnapshot, Trade } from '../db';
 import { DEFAULT_USD_RATE, round2 } from './money';
 
 /** 美股以美元計價，交割時換算台幣；台股匯率為 1 */
@@ -39,13 +39,15 @@ export interface Holding {
   costTWD: number;
 }
 
+type Pos = { symbol: string; market: 'TW' | 'US'; shares: number; cost: number; costTWD: number; name?: string };
+
 /**
  * 以平均成本法計算持股與每筆賣出的已實現損益（台幣）。
  * 美股的成本和賣出收入都用當筆交易的匯率換成台幣，所以損益包含匯差。
- * 賣出股數超過持股時，只就持有的部分計算。
+ * 賣出股數超過持股時，只就持有的部分計算。start 是起始持股（例如庫存截圖）。
  */
-export function analyzePositions(trades: Trade[], until?: string): { holdings: Holding[]; realized: Map<string, number> } {
-  const pos = new Map<string, { symbol: string; market: 'TW' | 'US'; shares: number; cost: number; costTWD: number; name?: string }>();
+export function analyzePositions(trades: Trade[], until?: string, start: Pos[] = []): { holdings: Holding[]; realized: Map<string, number> } {
+  const pos = new Map<string, Pos>(start.map((p) => [`${p.market}:${p.symbol}`, { ...p }]));
   const realized = new Map<string, number>();
   for (const t of sortTrades(trades)) {
     if (until && t.date > until) continue;
@@ -76,7 +78,38 @@ export function analyzePositions(trades: Trade[], until?: string): { holdings: H
   return { holdings, realized };
 }
 
-/** 持股成本合計（台幣），date 之前（含）的交易 */
-export function holdingsCost(trades: Trade[], date?: string): number {
-  return round2(analyzePositions(trades, date).holdings.reduce((a, h) => a + h.costTWD, 0));
+/** 庫存截圖之後才記的交易（手動補記的），要加在截圖的持股上 */
+function afterSnapshot(t: Trade, snap: HoldingSnapshot): boolean {
+  if (t.date > snap.date) return true;
+  return t.date === snap.date && t.source !== 'import' && t.createdAt > snap.createdAt;
+}
+
+/**
+ * 目前持股。
+ * 有庫存截圖時以截圖為準（交易紀錄只是過程），再加上截圖之後手動記的交易；
+ * 沒有截圖時才用全部交易推算。
+ */
+export function currentHoldings(trades: Trade[], snap?: HoldingSnapshot, usdRate = DEFAULT_USD_RATE, until?: string): Holding[] {
+  if (!snap || (until && until < snap.date)) return analyzePositions(trades, until).holdings;
+  const start: Pos[] = snap.items
+    .filter((i) => i.shares > 0)
+    .map((i) => {
+      const cost = (i.avgCost ?? 0) * i.shares;
+      return { symbol: i.symbol, market: i.market, name: i.name, shares: i.shares, cost, costTWD: cost * (i.market === 'US' ? usdRate : 1) };
+    });
+  return analyzePositions(
+    trades.filter((t) => afterSnapshot(t, snap)),
+    until,
+    start,
+  ).holdings;
+}
+
+/** 持股成本合計（台幣）；date 之前（含）；有庫存截圖時以截圖為準 */
+export function holdingsCost(trades: Trade[], date?: string, snap?: HoldingSnapshot, usdRate = DEFAULT_USD_RATE): number {
+  return round2(currentHoldings(trades, snap, usdRate, date).reduce((a, h) => a + h.costTWD, 0));
+}
+
+/** 最新的一張庫存截圖 */
+export function latestSnapshot(list: HoldingSnapshot[] | undefined): HoldingSnapshot | undefined {
+  return [...(list ?? [])].sort((a, b) => a.date.localeCompare(b.date) || a.createdAt - b.createdAt).pop();
 }

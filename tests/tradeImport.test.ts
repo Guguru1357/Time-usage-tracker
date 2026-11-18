@@ -3,7 +3,7 @@ import Dexie from 'dexie';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { TimeLedgerDB, db } from '../src/db';
 import { ensureSeeded } from '../src/defaults';
-import { analyzePositions } from '../src/wallet/positions';
+import { analyzePositions, currentHoldings, holdingsCost, latestSnapshot } from '../src/wallet/positions';
 import { CLAUDE_PROMPT, applyImport, mismatchReport, monthsOf, parseTradeImport, planImport, priorPositions, summarizeBySymbol } from '../src/wallet/tradeImport';
 
 beforeEach(async () => {
@@ -60,22 +60,39 @@ describe('plan & apply', () => {
       }),
     );
 
-  it('checks holdings and builds opening positions for what the trades do not cover', () => {
+  it('uses the holdings screenshot as the current positions; trades are only the process', async () => {
     const plan = planImport(parsed(), 32, 1000);
     expect(plan.from).toBe('2026-11-03');
-    expect(plan.checks.map((c) => [c.symbol, c.expected, c.computed])).toEqual([
-      ['2330', 1500, 500],
-      ['0050', 2000, 0],
-    ]);
-    expect(plan.opening.map((t) => [t.symbol, t.shares, t.price, t.date])).toEqual([
-      ['2330', 1000, 980, '2026-11-02'],
-      ['0050', 2000, 150, '2026-11-02'],
-    ]);
-    const all = [...plan.opening, ...plan.trades];
-    expect(analyzePositions(all).holdings.map((h) => [h.symbol, h.shares])).toEqual([
+    expect(plan.holdings?.map((h) => [h.symbol, h.shares])).toEqual([
       ['2330', 1500],
       ['0050', 2000],
     ]);
+    const r = await applyImport(plan, { mode: 'months' }, '2026-11-18');
+    expect(r.snapshot).toBe(true);
+
+    const trades = await db.trades.toArray();
+    const snap = latestSnapshot(await db.holdingSnapshots.toArray())!;
+    // 交易只算得出 500 股，但持股以庫存截圖為準
+    expect(analyzePositions(trades).holdings.find((h) => h.symbol === '2330')?.shares).toBe(500);
+    const now = currentHoldings(trades, snap, 32);
+    expect(now.map((h) => [h.symbol, h.shares, h.avgCost])).toEqual([
+      ['2330', 1500, 980],
+      ['0050', 2000, 150],
+    ]);
+    expect(holdingsCost(trades, undefined, snap, 32)).toBe(1500 * 980 + 2000 * 150);
+
+    // 截圖之後手動記的交易，加在截圖的持股上
+    await db.trades.add({ id: 'later', date: '2026-11-19', side: 'sell', symbol: '0050', price: 160, shares: 500, createdAt: Date.now() });
+    const after = currentHoldings(await db.trades.toArray(), snap, 32);
+    expect(after.find((h) => h.symbol === '0050')?.shares).toBe(1500);
+  });
+
+  it('an empty holdings list means nothing is held any more', async () => {
+    await applyImport(planImport(parsed(), 32, 1000), { mode: 'months' }, '2026-11-18');
+    const p = parseTradeImport(file({ trades: [{ date: '2026-11-25', side: 'sell', symbol: '2330', price: 1100, shares: 500 }], holdings: [] }));
+    await applyImport(planImport(p, 32, 2000), { mode: 'append' }, '2026-11-25');
+    const snap = latestSnapshot(await db.holdingSnapshots.toArray())!;
+    expect(currentHoldings(await db.trades.toArray(), snap, 32)).toEqual([]);
   });
 
   it('replaces only the months in the file by default, without touching account balances', async () => {
@@ -85,22 +102,22 @@ describe('plan & apply', () => {
     const plan = planImport(parsed(), 32, 1000);
     expect(monthsOf(plan)).toEqual(['2026-11']);
 
-    const r1 = await applyImport(plan, { mode: 'months', addOpening: false });
-    expect(r1).toEqual({ added: 2, skipped: 0, removed: 1 });
+    const r1 = await applyImport(plan, { mode: 'months' });
+    expect(r1).toEqual({ added: 2, skipped: 0, removed: 1, snapshot: true });
     expect(await db.trades.get('nov')).toBeUndefined();
     expect(await db.trades.get('oct')).toBeDefined();
     expect(await db.balances.count()).toBe(balancesBefore);
 
     // 再匯入同一個月：整個月換掉，不會重複
-    const r2 = await applyImport(planImport(parsed(), 32, 2000), { mode: 'months', addOpening: false });
-    expect(r2).toEqual({ added: 2, skipped: 0, removed: 2 });
+    const r2 = await applyImport(planImport(parsed(), 32, 2000), { mode: 'months' });
+    expect(r2).toEqual({ added: 2, skipped: 0, removed: 2, snapshot: true });
     expect(await db.trades.count()).toBe(3);
 
-    const r3 = await applyImport(planImport(parsed(), 32, 3000), { mode: 'append', addOpening: false });
-    expect(r3).toEqual({ added: 0, skipped: 2, removed: 0 });
+    const r3 = await applyImport(planImport(parsed(), 32, 3000), { mode: 'append' });
+    expect(r3).toEqual({ added: 0, skipped: 2, removed: 0, snapshot: true });
 
-    const r4 = await applyImport(planImport(parsed(), 32, 4000), { mode: 'all', addOpening: true });
-    expect(r4).toEqual({ added: 4, skipped: 0, removed: 3 });
+    const r4 = await applyImport(planImport(parsed(), 32, 4000), { mode: 'all' });
+    expect(r4).toEqual({ added: 2, skipped: 0, removed: 3, snapshot: true });
     expect((await db.trades.toArray()).every((t) => !t.accountId)).toBe(true);
   });
 });
@@ -131,7 +148,6 @@ describe('day trades and holdings check', () => {
     expect(taiyao).toMatchObject({ bought: 1000, sold: 1000, net: 0, holding: 1000, dayTradeDates: ['2026-11-02'], status: 'mismatch' });
     expect(s.find((x) => x.symbol === '2330')!.status).toBe('ok');
     expect(mismatchReport(s)).toContain('6274 台燿：交易明細 買 1000 股、賣 1000 股（淨 +0），庫存截圖 1000 股');
-    // 預設不補期初持股，誤判的庫存不會變成持股
     expect(planImport(p).trades.find((t) => t.symbol === '6274')?.reason).toBe('當沖');
   });
 
@@ -151,8 +167,6 @@ describe('day trades and holdings check', () => {
     // 11 月沒交易、10 月買的還在庫存 → 一樣對得上
     expect(s.find((x) => x.symbol === '2317')).toMatchObject({ prior: 2000, net: 0, holding: 2000, status: 'ok' });
     expect(mismatchReport(s)).toBe('');
-    // 期初持股不會重複補
-    expect(planImport(p, 32, 1, prior).opening).toEqual([]);
     // 選「取代全部」時舊紀錄會刪掉，就沒有月初持有
     expect(priorPositions(await db.trades.toArray(), p, 'all').size).toBe(0);
   });
