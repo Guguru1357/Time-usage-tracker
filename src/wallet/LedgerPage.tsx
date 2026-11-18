@@ -113,7 +113,7 @@ export function LedgerPage() {
                             {e.note ? ` · ${e.note}` : ''}
                           </span>
                         </span>
-                        <span className="money-amt">{fmtTWD(e.amount)}</span>
+                        <span className="money-amt">{e.amount === 0 ? <span className="free-tag">免費</span> : fmtTWD(e.amount)}</span>
                       </button>
                     );
                   })}
@@ -213,12 +213,14 @@ function LedgerStats({ month, list, cats, payNames }: { month: string; list: Exp
             {(['meal', 'snack'] as Meal[]).map((m) => {
               const l = meal(m);
               const sum = l.reduce((a, e) => a + e.amount, 0);
+              const paid = l.filter((e) => e.amount > 0);
+              const free = l.length - paid.length;
               return (
                 <div key={m}>
                   <span>{MEALS[m]}</span>
                   <b>{fmtTWD(sum)}</b>
                   <small className="muted">
-                    {l.length} 筆 · 平均 {fmtTWD(l.length ? sum / l.length : 0)}
+                    {l.length} 筆{free ? `（免費 ${free}）` : ''} · 平均 {fmtTWD(paid.length ? sum / paid.length : 0)}
                   </small>
                 </div>
               );
@@ -272,6 +274,7 @@ export function ExpenseSheet({ initial, cats, onClose, onSaved }: { initial: Par
       : options;
   const chosenOpt = shownOptions.find((o) => o.value === chosen);
   const m = cat === 'food' ? meal : undefined;
+  const isFree = amount.trim() !== '' && Number(amount) === 0;
   const quick = sortQuickItems(useLiveQuery(() => db.quickItems.where('cat').equals(cat).toArray(), [cat]) ?? []).filter((q) => q.meal === m);
 
   function pick(q: { item: string; amount: number }) {
@@ -284,9 +287,10 @@ export function ExpenseSheet({ initial, cats, onClose, onSaved }: { initial: Par
 
   async function save() {
     const v = numOrUndef(amount);
-    if (!v || v <= 0) return setError('請輸入金額');
-    await saveExpense({ id: initial.id, date, amount: v, cat, meal: m, item, note, payWith: chosen });
-    onSaved(`已記錄 ${fmtTWD(v)}${chosenOpt?.deducts ? `，已從${chosenOpt.label}扣款` : ''}`);
+    if (v === undefined || v < 0) return setError('請輸入金額（被請客、公司出錢可以填 0）');
+    // 0 元（被請客、公司經費）只記錄，不需要付款方式
+    await saveExpense({ id: initial.id, date, amount: v, cat, meal: m, item, note, payWith: v === 0 ? undefined : chosen });
+    onSaved(v === 0 ? '已記錄（免費）' : `已記錄 ${fmtTWD(v)}${chosenOpt?.deducts ? `，已從${chosenOpt.label}扣款` : ''}`);
     onClose();
   }
 
@@ -321,6 +325,22 @@ export function ExpenseSheet({ initial, cats, onClose, onSaved }: { initial: Par
         <span>金額（NT$）</span>
         <input className="amount-input" type="number" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0" autoFocus={!initial.id} />
       </label>
+      <div className="chips free-chips">
+        <span className="muted">免費：</span>
+        {['被請客', '公司出錢'].map((why) => (
+          <button
+            key={why}
+            className={`chip${isFree && note.trim() === why ? ' selected' : ''}`}
+            onClick={() => {
+              setAmount('0');
+              setAutoFilled(null);
+              if (!note.trim() || note.trim() === '被請客' || note.trim() === '公司出錢') setNote(why);
+            }}
+          >
+            {why}
+          </button>
+        ))}
+      </div>
       <div className="cat-grid">
         {cats.map((c) => (
           <button key={c.id} className={`cat-btn${cat === c.id ? ' selected' : ''}`} style={{ ['--c' as string]: c.color }} onClick={() => setCat(c.id)}>
@@ -378,6 +398,7 @@ export function ExpenseSheet({ initial, cats, onClose, onSaved }: { initial: Par
         <input type="date" value={date} onChange={(e) => e.target.value && setDate(e.target.value)} />
         <small className="muted">{fmtDateLabel(date)}</small>
       </label>
+      {!isFree && (
       <div className="field">
         <span>付款方式</span>
         <div className="chips">
@@ -423,9 +444,10 @@ export function ExpenseSheet({ initial, cats, onClose, onSaved }: { initial: Par
           </button>
         )}
       </div>
+      )}
       <label className="field">
         <span>備註（選填）</span>
-        <input value={note} onChange={(e) => setNote(e.target.value)} />
+        <input value={note} onChange={(e) => setNote(e.target.value)} placeholder={isFree ? '例如：被誰請、公司訂的便當' : ''} />
       </label>
       {error && <div className="error">{error}</div>}
       {dayStart(date) > Date.now() && <div className="warn">日期在未來，確定嗎？</div>}

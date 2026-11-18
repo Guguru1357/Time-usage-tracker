@@ -2253,3 +2253,14 @@ h3 {
 .transfer-btn {
   margin: 0 0 10px;
 }
+.free-tag {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 10%, var(--surface));
+  border-radius: 999px;
+  padding: 2px 10px;
+}
+.free-chips {
+  margin-top: -6px;
+}

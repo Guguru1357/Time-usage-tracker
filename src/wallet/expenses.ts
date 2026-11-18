@@ -114,7 +114,8 @@ export async function saveExpense(data: Omit<Expense, 'id' | 'createdAt' | 'dedu
       createdAt: existing?.createdAt ?? Date.now(),
     };
     await revert(existing, e.date);
-    e.deducted = await deduct(e);
+    // 0 元（被請客、公司經費）不扣任何帳戶
+    e.deducted = e.amount > 0 ? await deduct(e) : undefined;
     await db.expenses.put(e);
 
     // 記住品項與這次的金額
@@ -122,7 +123,8 @@ export async function saveExpense(data: Omit<Expense, 'id' | 'createdAt' | 'dedu
       const id = quickId(e.cat, e.meal, e.item);
       const q = await db.quickItems.get(id);
       const changed = !existing || existing.item !== e.item || existing.cat !== e.cat || existing.meal !== e.meal;
-      await db.quickItems.put({ id, cat: e.cat, meal: e.meal, item: e.item, amount: e.amount, count: (q?.count ?? 0) + (changed ? 1 : 0) || 1, last: Date.now() });
+      // 免費的那一次不要蓋掉平常的價格
+      await db.quickItems.put({ id, cat: e.cat, meal: e.meal, item: e.item, amount: e.amount || q?.amount || 0, count: (q?.count ?? 0) + (changed ? 1 : 0) || 1, last: Date.now() });
     }
     // 下次預設用同一個付款方式
     if (e.payWith) {

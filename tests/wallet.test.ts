@@ -239,6 +239,17 @@ describe('money', () => {
     expect(q).toMatchObject({ amount: 120, count: 2 });
   });
 
+  it('records free meals (0 元) without deducting or overwriting the usual price', async () => {
+    const post = await saveAccount({ name: '郵局', kind: 'deposit' });
+    await setBalance(post, 1000, '2026-11-01');
+    await saveExpense({ date: '2026-11-09', amount: 110, cat: 'food', meal: 'meal', item: '排骨便當' });
+    const free = await saveExpense({ date: '2026-11-10', amount: 0, cat: 'food', meal: 'meal', item: '排骨便當', note: '公司出錢', payWith: `acct:${post}` });
+    expect(free.amount).toBe(0);
+    expect(free.deducted).toBeUndefined();
+    expect(balancesAt(await db.balances.toArray()).get(post)!.amount).toBe(1000);
+    expect(await db.quickItems.get('food|meal|排骨便當')).toMatchObject({ amount: 110, count: 2 });
+  });
+
   it('computes next charge and monthly cost', () => {
     const s: Subscription = { id: 's', name: 'Claude', amount: 20, currency: 'USD', cycle: 'monthly', billingDay: 31, category: 'tool', status: 'active' };
     expect(nextCharge(s, '2026-11-09')).toBe('2026-11-30');
